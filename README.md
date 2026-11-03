@@ -36,6 +36,19 @@ When asked `Add marketplace?`, answer `y`, then pick a scope. The pane opens by 
 - **Cost is an estimate.** The engine reports token counts per agent but no dollars. They are multiplied by the rates in [`hooks/track.ts`](hooks/track.ts), which are assumptions, not a price list. Edit them to match what you pay. The pane also shows the session total the engine itself keeps.
 - **Model, steps, tokens and activity are real.** They come straight from the engine's events.
 
+## Cost rates
+
+The dollar rates in [`hooks/track.ts`](hooks/track.ts) are my assumptions, not a price list, so edit them to match what you pay. The rates for the newest model families are guesses.
+
+| Model family | Input, per million tokens | Output, per million tokens |
+| --- | --- | --- |
+| Haiku | $1 | $5 |
+| Sonnet | $3 | $15 |
+| Opus | $5 | $25 |
+| Fable | $15 | $75 |
+
+Cache reads are billed at 0.1 times the input rate and cache writes at 1.25 times. A model the table doesn't recognize uses the Sonnet rates. Change the `RATES` list at the top of `hooks/track.ts` and the pane picks it up on the next reload.
+
 ## Development
 
 The mod is one hooks module (`hooks/register.tsx`) plus helpers. Run its tests and validation with:
