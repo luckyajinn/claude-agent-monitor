@@ -19,6 +19,10 @@ const RATES: ReadonlyArray<readonly [RegExp, number, number]> = [
 ]
 const DEFAULT_RATE = [3, 15] as const
 
+// False for a model the table does not name: its cost uses the default rate.
+export const isKnownRate = (model: string): boolean =>
+  RATES.some(([pattern]) => pattern.test(model))
+
 export const costOf = (u: Usage): number => {
   const [, input, output] = RATES.find(([pattern]) => pattern.test(u.model)) ?? [
     /./,
@@ -34,8 +38,10 @@ export const costOf = (u: Usage): number => {
   )
 }
 
-const short = (text: string, max = 48) =>
+export const trunc = (text: string, max: number): string =>
   text.length > max ? `${text.slice(0, max - 1)}…` : text
+
+const short = (text: string, max = 48) => trunc(text, max)
 
 const base = (path: unknown) => String(path ?? '').split(/[\\/]/).pop() ?? ''
 
@@ -76,8 +82,9 @@ export const describe = (
   }
 }
 
-// The engine knows no percent-complete, so this is a curve over steps taken:
-// quick at first, flattening toward 95 until the agent finishes.
+// The engine knows no percent-complete, and an agent's step limit is not in
+// any event, so this is a curve over steps taken: quick at first, flattening
+// toward 95 until the agent finishes. The pane draws it with a "~".
 export const progressOf = (row: AgentRow): number =>
   row.status === 'done'
     ? 100
@@ -89,8 +96,10 @@ export const newRow = (
   type: string,
   model: string,
   now: number,
+  parentId: string | null = null,
 ): AgentRow => ({
   id,
+  parentId,
   name,
   type,
   model,
@@ -112,6 +121,57 @@ export const patch = (
   id: string,
   fn: (row: AgentRow) => AgentRow,
 ): AgentRow[] => list.map(row => (row.id === id ? fn(row) : row))
+
+// An agent that was done or stopped is working again (it was resumed, or a
+// step arrived that no spawn announced): its run starts over, its spend stays.
+export const revive = (row: AgentRow, now: number): AgentRow =>
+  row.status === 'running'
+    ? row
+    : { ...row, status: 'running', endedAt: null, startedAt: now, steps: 0, activity: 'Starting', detail: '' }
+
+// At most `max` rows: when over, the oldest finished ones go first, then the
+// oldest of any.
+export const capRows = (list: AgentRow[], max: number): AgentRow[] => {
+  let rows = list
+
+  while (rows.length > max) {
+    const at = rows.findIndex(row => row.status !== 'running')
+    rows = rows.filter((_, i) => i !== (at === -1 ? 0 : at))
+  }
+
+  return rows
+}
+
+export const rootsOf = (list: AgentRow[]): AgentRow[] =>
+  list.filter(row => (row.parentId ?? null) === null)
+
+export const childrenOf = (list: AgentRow[], id: string): AgentRow[] =>
+  list.filter(row => row.parentId === id)
+
+// The longest prefix of `trail` that still names real rows, each one a child
+// of the one before it: a cleared or evicted agent shortens the trail.
+export const validTrail = (list: AgentRow[], trail: readonly string[]): string[] => {
+  const kept: string[] = []
+
+  for (const id of trail) {
+    const row = list.find(one => one.id === id)
+    const parent = kept[kept.length - 1] ?? null
+
+    if (row === undefined || (row.parentId ?? null) !== parent) {
+      break
+    }
+    kept.push(id)
+  }
+
+  return kept
+}
+
+// Running agents first, then finished ones; newest first within each.
+export const ordered = (rows: AgentRow[]): AgentRow[] => {
+  const newest = [...rows].reverse()
+
+  return [...newest.filter(row => row.status === 'running'), ...newest.filter(row => row.status !== 'running')]
+}
 
 export const addUsage = (row: AgentRow, usage: Usage | null | undefined): AgentRow =>
   usage
@@ -170,7 +230,7 @@ export const bar = (percent: number, width = 20): string => {
 }
 
 export const usd = (value: number): string =>
-  value < 0.01 ? '<$0.01' : `$${value.toFixed(2)}`
+  value === 0 ? '$0.00' : value < 0.01 ? '<$0.01' : `$${value.toFixed(2)}`
 
 export const clock = (ms: number): string => {
   const seconds = Math.max(0, Math.round(ms / 1000))

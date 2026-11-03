@@ -1,16 +1,23 @@
 # claude-agent-monitor
 
-A Claude Code mod that keeps a live pane of every subagent your session starts. Each agent gets a card showing:
+A Claude Code mod that keeps a live pane of every subagent your session starts. Each running agent gets a card showing:
 
 - **Model:** a plain name such as "Sonnet 5.5".
 - **Task:** what it is doing right now (Researching, Writing, Verifying, Delegating, Done), with the file or command in progress.
-- **Progress:** a percent bar.
+- **Progress:** an estimated percent bar, drawn with a "~".
 - **Cost:** estimated dollars and token counts.
 - **A crab:** an 8-bit sprite that works while the agent works and raises its arms when it is done.
 
 A one-line summary also appears above the prompt while any agent is running. Anything another plugin draws there (a usage bar, for example) stays beneath it.
 
-The pane shows the latest prompt's work only. When you send a new prompt, cards for finished agents clear; agents still running stay. A slash command or a background notification does not clear anything.
+## Using the pane
+
+- **Finished agents shrink to one line** (a tick, the name, the time and the cost, with a small crab), so a busy session stays readable. Past eight finished agents the rest collapse into "+N earlier finished".
+- **Click an agent to open it like a folder.** The other cards step aside, the agent's own subagents take their place, and a breadcrumb at the top (`Agents › Scout the repo`) takes you back up. A `▸ 2` beside a name says it has two agents inside.
+- **Clear all** empties the pane. An agent that is still working comes back on its next step.
+- **The pane shows the latest prompt's work only.** When you send a new prompt, finished cards clear. A running card the engine no longer lists as going clears too, so a missed end cannot leave one stuck. A slash command or a background notification does not clear anything.
+- **Statuses recover.** An agent that was done and works again (it was resumed) shows as running again, and a step from an agent the mod never saw start still gets a card.
+- **In a terminal** the same cards draw as text, with `\o_o/` for the crab.
 
 ## Install
 
@@ -32,26 +39,26 @@ When asked `Add marketplace?`, answer `y`, then pick a scope. The pane opens by 
 
 ## What is real and what is estimated
 
-- **Progress is an estimate.** The engine has no percent-complete for an agent, so the bar is a curve over steps taken: quick at first, flattening toward 95%, and 100% when the agent finishes.
-- **Cost is an estimate.** The engine reports token counts per agent but no dollars. They are multiplied by the rates in [`hooks/track.ts`](hooks/track.ts), which are assumptions, not a price list. Edit them to match what you pay. The pane also shows the session total the engine itself keeps.
+- **Progress is an estimate, drawn with a "~".** The engine has no percent-complete for an agent, and an agent's step limit is not in any event the mod receives. So the bar is a curve over steps taken: quick at first, flattening toward 95%, and 100% when the agent finishes.
+- **Cost is an estimate.** The engine reports token counts per agent but no dollars. They are multiplied by the rates below, which are assumptions. A model the table does not name uses the default rate and the card says "default rate". The pane also shows the session total the engine itself keeps.
 - **Model, steps, tokens and activity are real.** They come straight from the engine's events.
 
 ## Cost rates
 
-The dollar rates in [`hooks/track.ts`](hooks/track.ts) are my assumptions, not a price list, so edit them to match what you pay. The rates for the newest model families are guesses.
+The dollar rates in [`hooks/track.ts`](hooks/track.ts) are my assumptions, not a price list, so edit them to match what you pay.
 
-| Model family | Input, per million tokens | Output, per million tokens |
-| --- | --- | --- |
-| Haiku | $1 | $5 |
-| Sonnet | $3 | $15 |
-| Opus | $5 | $25 |
-| Fable | $15 | $75 |
+| Model family | Input, per million tokens | Output, per million tokens | Basis |
+| --- | --- | --- | --- |
+| Haiku | $1 | $5 | Assumed |
+| Sonnet | $3 | $15 | Assumed |
+| Opus | $5 | $25 | Assumed |
+| Fable | $15 | $75 | Guess |
 
-Cache reads are billed at 0.1 times the input rate and cache writes at 1.25 times. A model the table doesn't recognize uses the Sonnet rates. Change the `RATES` list at the top of `hooks/track.ts` and the pane picks it up on the next reload.
+Cache reads are billed at 0.1 times the input rate and cache writes at 1.25 times. A model the table doesn't recognize uses the Sonnet rates. Change the `RATES` list at the top of `hooks/track.ts` and the pane picks it up on the next reload. A marketplace install is a cached copy, so an update to the mod will overwrite your edit.
 
 ## Development
 
-The mod is one hooks module (`hooks/register.tsx`) plus helpers. Run its tests and validation with:
+The mod is one hooks module (`hooks/register.tsx`) plus helpers (`hooks/track.ts` for the state and numbers, `hooks/crab.ts` and `hooks/crabs.ts` for the sprite). A fresh clone cannot type-check until Claude Code has loaded the mod once, because `tsconfig.json` extends a file the engine writes. Run the tests and validation with:
 
 ```
 claude plugin test .

@@ -2,6 +2,8 @@ export type AgentStatus = 'running' | 'done' | 'failed' | 'stopped'
 
 export type AgentRow = {
   id: string
+  /** The agent that spawned this one; null when the main conversation did. */
+  parentId: string | null
   name: string
   type: string
   model: string
@@ -20,6 +22,10 @@ export type AgentRow = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'agent-monitor': { agents: AgentRow[] }
+    'agent-monitor': {
+      agents: AgentRow[]
+      /** Ids from the top down: the agent whose children the pane shows. */
+      path: string[]
+    }
   }
 }
