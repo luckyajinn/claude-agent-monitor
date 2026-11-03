@@ -20,6 +20,12 @@ Click an agent's name to open it: the other cards step aside, a breadcrumb shows
 
 ![An opened agent's detail view](docs/detail-view.png)
 
+### Works alongside other UI mods
+
+The mod's one-line summary sits above whatever another plugin draws above the prompt instead of replacing it. Here it runs with a usage ribbon from RoboNuggets (7-day and 5-hour usage and a countdown badge); both stay visible:
+
+![The agent summary line above a usage ribbon](docs/compat-ribbon.png)
+
 ## Using the pane
 
 - **Every agent is an expanded card**, running or finished, so you see them all at a glance. Past eight finished agents the rest collapse into "+N earlier finished".
