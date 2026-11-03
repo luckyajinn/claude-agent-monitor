@@ -1,0 +1,12 @@
+{
+  "name": "claude-agent-monitor",
+  "description": "Claude Code mods by luckyajinnITsolutions.",
+  "owner": { "name": "luckyajinnITsolutions" },
+  "plugins": [
+    {
+      "name": "agent-monitor",
+      "source": "./",
+      "description": "A live pane that tracks every Claude Code subagent: model, estimated progress, estimated cost and what it is doing right now."
+    }
+  ]
+}
