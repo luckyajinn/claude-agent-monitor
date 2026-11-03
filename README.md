@@ -10,13 +10,24 @@ A Claude Code mod that keeps a live pane of every subagent your session starts. 
 
 A one-line summary also appears above the prompt while any agent is running. Anything another plugin draws there (a usage bar, for example) stays beneath it.
 
+## Screenshots
+
+Two running agents as expanded cards, each with its model, estimated progress, estimated cost, token counts and current task:
+
+![Two running agents as expanded cards](docs/cards.png)
+
+Click an agent's name to open it: the other cards step aside, a breadcrumb shows where you are, and the detail view shows its task, model, progress, tokens, cost and recent steps:
+
+![An opened agent's detail view](docs/detail-view.png)
+
 ## Using the pane
 
-- **Finished agents shrink to one line** (a tick, the name, the time and the cost, with a small crab), so a busy session stays readable. Past eight finished agents the rest collapse into "+N earlier finished".
+- **Every agent is an expanded card**, running or finished, so you see them all at a glance. Past eight finished agents the rest collapse into "+N earlier finished".
 - **Click an agent to open it like a folder.** The other cards step aside, the agent's own subagents take their place, and a breadcrumb at the top (`Agents › Scout the repo`) takes you back up. A `▸ 2` beside a name says it has two agents inside.
+- **An opened agent shows its detail:** the task it was given, its model (name and id), agent type, effort and whether it runs in the background; its status, steps, time, message count and last stop reason; its tokens (input, cache read, cache write, output, and the size of its context now); its estimated cost split into input, cache and output; its last eight steps, one line each; and its final report once it finishes.
 - **Clear all** empties the pane. An agent that is still working comes back on its next step.
 - **The pane shows the latest prompt's work only.** When you send a new prompt, finished cards clear. A running card the engine no longer lists as going clears too, so a missed end cannot leave one stuck. A slash command or a background notification does not clear anything.
-- **Statuses recover.** An agent that was done and works again (it was resumed) shows as running again, and a step from an agent the mod never saw start still gets a card.
+- **Statuses recover.** An agent that was done and works again (it was resumed) shows as running again, and a step from an agent the mod never saw start still gets a card. A resumed agent's time, steps and log start over, while its tokens and cost keep adding up.
 - **In a terminal** the same cards draw as text, with `\o_o/` for the crab.
 
 ## Install
@@ -42,6 +53,10 @@ When asked `Add marketplace?`, answer `y`, then pick a scope. The pane opens by 
 - **Progress is an estimate, drawn with a "~".** The engine has no percent-complete for an agent, and an agent's step limit is not in any event the mod receives. So the bar is a curve over steps taken: quick at first, flattening toward 95%, and 100% when the agent finishes.
 - **Cost is an estimate.** The engine reports token counts per agent but no dollars. They are multiplied by the rates below, which are assumptions. A model the table does not name uses the default rate and the card says "default rate". The pane also shows the session total the engine itself keeps.
 - **Model, steps, tokens and activity are real.** They come straight from the engine's events.
+
+## Privacy
+
+Nothing is written to disk and nothing is sent anywhere. An agent's task text and final report are kept in memory inside the mod only, so a reload of the mod forgets them. The rest (names, status, activity lines with file names and commands, token counts and costs) lives in the session's plugin state, which other plugins in the same session can read.
 
 ## Cost rates
 

@@ -11,11 +11,26 @@ export type AgentRow = {
   steps: number
   activity: string
   detail: string
+  /** The thinking effort of its latest request, when the model has one. */
+  effort: string | null
+  isBackground: boolean
+  isFork: boolean
+  /** How many messages its latest request carried. */
+  messages: number
+  /** Tokens its latest request read: the size of its context now. */
+  contextTokens: number
+  /** Why its latest response stopped (end_turn, tool_use, ...). */
+  stop: string | null
+  /** What it did, one line per step, newest last (the last few). */
+  log: string[]
   inputTokens: number
   outputTokens: number
   cacheReadTokens: number
   cacheWriteTokens: number
   costUsd: number
+  costInUsd: number
+  costOutUsd: number
+  costCacheUsd: number
   startedAt: number
   endedAt: number | null
 }

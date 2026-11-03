@@ -23,19 +23,26 @@ const DEFAULT_RATE = [3, 15] as const
 export const isKnownRate = (model: string): boolean =>
   RATES.some(([pattern]) => pattern.test(model))
 
-export const costOf = (u: Usage): number => {
+// What a request cost, split as the detail view shows it.
+export const costParts = (u: Usage): { input: number; output: number; cache: number } => {
   const [, input, output] = RATES.find(([pattern]) => pattern.test(u.model)) ?? [
     /./,
     ...DEFAULT_RATE,
   ]
 
-  return (
-    (u.input_tokens * input +
-      u.output_tokens * output +
-      u.cache_read_input_tokens * input * 0.1 +
-      u.cache_creation_input_tokens * input * 1.25) /
-    1_000_000
-  )
+  return {
+    input: (u.input_tokens * input) / 1_000_000,
+    output: (u.output_tokens * output) / 1_000_000,
+    cache:
+      (u.cache_read_input_tokens * input * 0.1 + u.cache_creation_input_tokens * input * 1.25) /
+      1_000_000,
+  }
+}
+
+export const costOf = (u: Usage): number => {
+  const parts = costParts(u)
+
+  return parts.input + parts.output + parts.cache
 }
 
 export const trunc = (text: string, max: number): string =>
@@ -97,6 +104,7 @@ export const newRow = (
   model: string,
   now: number,
   parentId: string | null = null,
+  extra: Partial<AgentRow> = {},
 ): AgentRow => ({
   id,
   parentId,
@@ -107,27 +115,54 @@ export const newRow = (
   steps: 0,
   activity: 'Starting',
   detail: '',
+  effort: null,
+  isBackground: false,
+  isFork: false,
+  messages: 0,
+  contextTokens: 0,
+  stop: null,
+  log: [],
   inputTokens: 0,
   outputTokens: 0,
   cacheReadTokens: 0,
   cacheWriteTokens: 0,
   costUsd: 0,
+  costInUsd: 0,
+  costOutUsd: 0,
+  costCacheUsd: 0,
   startedAt: now,
   endedAt: null,
+  ...extra,
+})
+
+// A row from an earlier version of the mod lacks the newer fields: give it
+// their defaults, so state that outlives a reload still draws.
+export const fill = (row: Partial<AgentRow> & { id: string }): AgentRow => ({
+  ...newRow(row.id, 'Subagent', 'agent', '', 0),
+  ...row,
 })
 
 export const patch = (
   list: AgentRow[],
   id: string,
   fn: (row: AgentRow) => AgentRow,
-): AgentRow[] => list.map(row => (row.id === id ? fn(row) : row))
+): AgentRow[] => list.map(row => (row.id === id ? fn(fill(row)) : row))
 
 // An agent that was done or stopped is working again (it was resumed, or a
 // step arrived that no spawn announced): its run starts over, its spend stays.
 export const revive = (row: AgentRow, now: number): AgentRow =>
   row.status === 'running'
     ? row
-    : { ...row, status: 'running', endedAt: null, startedAt: now, steps: 0, activity: 'Starting', detail: '' }
+    : {
+        ...row,
+        status: 'running',
+        endedAt: null,
+        startedAt: now,
+        steps: 0,
+        activity: 'Starting',
+        detail: '',
+        log: [],
+      }
 
 // At most `max` rows: when over, the oldest finished ones go first, then the
 // oldest of any.
@@ -173,24 +208,36 @@ export const ordered = (rows: AgentRow[]): AgentRow[] => {
   return [...newest.filter(row => row.status === 'running'), ...newest.filter(row => row.status !== 'running')]
 }
 
-export const addUsage = (row: AgentRow, usage: Usage | null | undefined): AgentRow =>
-  usage
-    ? {
-        ...row,
-        model: usage.model,
-        inputTokens: row.inputTokens + usage.input_tokens,
-        outputTokens: row.outputTokens + usage.output_tokens,
-        cacheReadTokens: row.cacheReadTokens + usage.cache_read_input_tokens,
-        cacheWriteTokens: row.cacheWriteTokens + usage.cache_creation_input_tokens,
-        costUsd: row.costUsd + costOf(usage),
-      }
-    : row
+export const addUsage = (row: AgentRow, usage: Usage | null | undefined): AgentRow => {
+  if (!usage) {
+    return row
+  }
+  const parts = costParts(usage)
 
+  return {
+    ...row,
+    model: usage.model,
+    inputTokens: row.inputTokens + usage.input_tokens,
+    outputTokens: row.outputTokens + usage.output_tokens,
+    cacheReadTokens: row.cacheReadTokens + usage.cache_read_input_tokens,
+    cacheWriteTokens: row.cacheWriteTokens + usage.cache_creation_input_tokens,
+    costInUsd: row.costInUsd + parts.input,
+    costOutUsd: row.costOutUsd + parts.output,
+    costCacheUsd: row.costCacheUsd + parts.cache,
+    costUsd: row.costUsd + parts.input + parts.output + parts.cache,
+  }
+}
+
+const LOG_LINES = 8
+
+// One model request of the agent: what it asked for, what it cost, how big
+// its context is, and a line in its log.
 export const applyStep = (
   row: AgentRow,
   usage: Usage | null,
   toolUses: ReadonlyArray<{ name: string; input: unknown }>,
   answer: string,
+  meta: { effort?: string | number | null; messages?: number; stop?: string | null } = {},
 ): AgentRow => {
   const first = toolUses[0]
   const next = first
@@ -198,8 +245,25 @@ export const applyStep = (
     : answer !== ''
       ? { activity: 'Writing report', detail: '' }
       : { activity: row.activity, detail: row.detail }
+  const more = toolUses.length > 1 ? ` (+${toolUses.length - 1})` : ''
+  const line = `${row.steps + 1}. ${next.activity}${next.detail === '' ? '' : ` · ${next.detail}`}${more}`
 
-  return addUsage({ ...row, ...next, steps: row.steps + 1 }, usage)
+  return addUsage(
+    {
+      ...row,
+      ...next,
+      steps: row.steps + 1,
+      log: [...row.log, line].slice(-LOG_LINES),
+      effort: meta.effort === undefined || meta.effort === null ? row.effort : String(meta.effort),
+      messages: meta.messages ?? row.messages,
+      // A request that failed has no stop reason: keep the last known one.
+      stop: meta.stop ?? row.stop,
+      contextTokens: usage
+        ? usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens
+        : row.contextTokens,
+    },
+    usage,
+  )
 }
 
 export const finish = (row: AgentRow, status: AgentStatus, now: number): AgentRow => ({

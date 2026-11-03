@@ -10,6 +10,7 @@ import {
   capRows,
   childrenOf,
   clock,
+  fill,
   finish,
   isKnownRate,
   newRow,
@@ -88,6 +89,10 @@ const ensure = async ($: EngineInterface, id: string, model: string, now: number
 
 export const register: Register = on => {
   let isShown = false
+  // The task an agent was given and its final report are free text: they stay
+  // in this module, not in `$.state`, which any plugin in the session can read.
+  // A reload of the mod forgets them; the pane then says so.
+  const notes = new Map<string, { prompt: string; report: string }>()
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -146,12 +151,17 @@ export const register: Register = on => {
       const id = started.agentId
       const now = await $.clock.now()
       const parentId = e.parentAgentId ?? null
-      const row = newRow(id, e.description, e.subagentType, started.model, now, parentId)
+      const given = { isBackground: e.background, isFork: e.fork }
+      const row = newRow(id, e.description, e.subagentType, started.model, now, parentId, given)
+      notes.set(id, { prompt: trunc(e.prompt, 400), report: '' })
 
       await update($, agents, list =>
         list.some(one => one.id === id)
           ? patch(list, id, one =>
-              revive({ ...one, name: e.description, type: e.subagentType, parentId, model: started.model }, now),
+              revive(
+                { ...one, ...given, name: e.description, type: e.subagentType, parentId, model: started.model },
+                now,
+              ),
             )
           : capRows([...list, row], MAX_ROWS),
       )
@@ -194,7 +204,11 @@ export const register: Register = on => {
         await ensure($, id, e.model, now)
         await update($, agents, list =>
           patch(list, id, row =>
-            applyStep(revive(row, now), result.usage, result.toolUses, result.answer),
+            applyStep(revive(row, now), result.usage, result.toolUses, result.answer, {
+              effort: e.effort,
+              messages: e.messageCount,
+              stop: result.stopReason,
+            }),
           ),
         )
       } catch {
@@ -214,6 +228,8 @@ export const register: Register = on => {
           e.reason === 'answer' ? 'done' : e.reason === 'aborted' ? 'stopped' : 'failed'
         const now = await $.clock.now()
         await ensure($, id, e.usage?.model ?? '', now)
+        // Set before the write below, which redraws the pane.
+        notes.set(id, { prompt: notes.get(id)?.prompt ?? '', report: trunc(e.answer, 500) })
         // The turn's own summed usage stands in when no step of it was heard.
         await update($, agents, list =>
           patch(list, id, row =>
@@ -234,7 +250,8 @@ export const register: Register = on => {
     // table hands out an `Svg` that draws nothing).
     const { Svg } = $.ui.resolve(e) as unknown as { Svg: SvgElement }
     const hasSvg = e.surface !== 'terminal'
-    const all: AgentRow[] = await read($, agents)
+    // Rows kept from an earlier version lack the newer fields: fill them in.
+    const all: AgentRow[] = (await read($, agents)).map(fill)
     const now = await $.clock.now()
 
     if (all.length === 0) {
@@ -258,8 +275,8 @@ export const register: Register = on => {
     const insideOf = (row: AgentRow) => childrenOf(all, row.id).length
     const spent = (row: AgentRow) => clock((row.endedAt ?? now) - row.startedAt)
 
-    // A card with everything: the running ones, and the one that is open.
-    const fullCard = (row: AgentRow, isOpen: boolean) => {
+    // Every agent is a card with the essentials; clicking its name opens it.
+    const card = (row: AgentRow) => {
       const percent = progressOf(row)
       const color = COLORS[row.status]
       const inside = insideOf(row)
@@ -273,14 +290,10 @@ export const register: Register = on => {
       return (
         <Box key={`card-${row.id}`} flexDirection="column" borderStyle="round" borderColor={color} paddingX={1}>
           <Box justifyContent="space-between" gap={1}>
-            {isOpen ? (
-              title
-            ) : (
-              <Button key={`open-${row.id}`} plain onPress={() => openTo(row)}>
-                {title}
-                <Text dimColor>{inside > 0 ? ` ▸ ${inside}` : ' ›'}</Text>
-              </Button>
-            )}
+            <Button key={`open-${row.id}`} plain onPress={() => openTo(row)}>
+              {title}
+              <Text dimColor>{inside > 0 ? ` ▸ ${inside}` : ' ›'}</Text>
+            </Button>
             {isNarrow ? null : activity}
           </Box>
           {isNarrow ? activity : null}
@@ -327,26 +340,117 @@ export const register: Register = on => {
       )
     }
 
-    // A finished agent in one line, with a small still crab.
-    const lineRow = (row: AgentRow) => {
-      const inside = insideOf(row)
+    const kv = (label: string, value: string) => (
+      <Box justifyContent="space-between" gap={1}>
+        <Text dimColor>{label}</Text>
+        <Text>{value}</Text>
+      </Box>
+    )
+
+    // The open agent in depth: its task, model, progress, tokens, cost and
+    // what it has been doing, line by line.
+    const detailCard = (row: AgentRow) => {
+      const percent = progressOf(row)
+      const color = COLORS[row.status]
+      const modelNote = row.model === '' || isKnownRate(row.model) ? '' : ' (default rate)'
+      const note = notes.get(row.id)
+      // Rows kept from an earlier version have a total but no split.
+      const hasSplit = row.costInUsd + row.costOutUsd + row.costCacheUsd > 0
 
       return (
-        <Box key={`row-${row.id}`} gap={1} alignItems="center">
-          {!hasSvg ? (
-            <Text color="red">{'\\o_o/'}</Text>
-          ) : (
-            <Svg source={crabSvg(row.status)} alt={`Crab, ${row.status}`} width={24} height={16} />
-          )}
-          <Button key={`open-${row.id}`} plain onPress={() => openTo(row)}>
-            <Text color={COLORS[row.status]}>{ICONS[row.status]} </Text>
-            <Text>{trunc(row.name, nameMax - 6)}</Text>
-            <Text dimColor>
-              {' '}
-              · {spent(row)} · {usd(row.costUsd)}
-              {inside > 0 ? ` · ▸ ${inside}` : ''}
+        <Box key={`detail-${row.id}`} flexDirection="column" gap={1} borderStyle="round" borderColor={color} paddingX={1}>
+          <Box gap={1} alignItems="center">
+            {!hasSvg ? (
+              <Text color="red">{'\\o_o/'}</Text>
+            ) : (
+              <Svg
+                source={crabSvg(row.status)}
+                alt={`Crab, ${row.status}`}
+                width={48}
+                height={32}
+                isInteractive={row.status === 'running'}
+              />
+            )}
+            <Box flexDirection="column">
+              <Text weight="bold">
+                {ICONS[row.status]} {trunc(row.name, nameMax)}
+              </Text>
+              <Text color={color}>
+                {row.activity}
+                {row.detail === '' ? '' : ` · ${row.detail}`}
+              </Text>
+            </Box>
+          </Box>
+          <Box gap={1} alignItems="center">
+            {!hasSvg ? (
+              <Text color={color}>{bar(percent, 12)}</Text>
+            ) : (
+              <Svg
+                source={barSvg(percent, FILLS[row.status])}
+                alt={`${row.status}, about ${percent} percent`}
+                width={110}
+                height={9}
+              />
+            )}
+            <Text color={color} weight="bold" tabular>
+              {row.status === 'done' ? '' : '~'}
+              {percent}%
             </Text>
-          </Button>
+          </Box>
+          <Box flexDirection="column">
+            <Text weight="bold">Task</Text>
+            <Text dimColor>
+              {note === undefined || note.prompt === ''
+                ? 'Task not seen: the mod did not see this agent start.'
+                : note.prompt}
+            </Text>
+          </Box>
+          <Box flexDirection="column">
+            <Text weight="bold">Model</Text>
+            {kv('Name', prettyModel(row.model) || 'unknown')}
+            {kv('Id', row.model || 'unknown')}
+            {kv('Agent type', row.type)}
+            {row.effort === null ? null : kv('Effort', row.effort)}
+            {kv('Runs', `${row.isBackground ? 'in the background' : 'in the foreground'}${row.isFork ? ', as a fork' : ''}`)}
+          </Box>
+          <Box flexDirection="column">
+            <Text weight="bold">Progress</Text>
+            {kv('Status', row.status)}
+            {kv('Steps', String(row.steps))}
+            {kv('Time', spent(row))}
+            {kv('Messages', String(row.messages))}
+            {kv('Last stop', row.stop ?? 'none yet')}
+          </Box>
+          <Box flexDirection="column">
+            <Text weight="bold">Tokens</Text>
+            {kv('Input (uncached)', tokens(row.inputTokens))}
+            {kv('Cache read', tokens(row.cacheReadTokens))}
+            {kv('Cache write', tokens(row.cacheWriteTokens))}
+            {kv('Total in', tokens(row.inputTokens + row.cacheReadTokens + row.cacheWriteTokens))}
+            {kv('Output', tokens(row.outputTokens))}
+            {kv('Context now', tokens(row.contextTokens))}
+          </Box>
+          <Box flexDirection="column">
+            <Text weight="bold">Cost (est.)</Text>
+            {hasSplit ? kv('Input', usd(row.costInUsd)) : null}
+            {hasSplit ? kv('Cache', usd(row.costCacheUsd)) : null}
+            {hasSplit ? kv('Output', usd(row.costOutUsd)) : null}
+            {kv('Total', `${usd(row.costUsd)}${modelNote}`)}
+          </Box>
+          {row.log.length === 0 ? null : (
+            <Box flexDirection="column">
+              <Text weight="bold">Recent</Text>
+              {row.log.map(line => (
+                <Text dimColor>{line}</Text>
+              ))}
+            </Box>
+          )}
+          {row.status === 'running' || note === undefined || note.report === '' ? null : (
+            <Box flexDirection="column">
+              <Text weight="bold">Report</Text>
+              <Text dimColor>{note.report}</Text>
+            </Box>
+          )}
         </Box>
       )
     }
@@ -394,12 +498,12 @@ export const register: Register = on => {
             })}
           </Box>
         )}
-        {current === undefined ? null : fullCard(current, true)}
+        {current === undefined ? null : detailCard(current)}
         {current === undefined ? null : (
           <Text dimColor>{level.length === 0 ? 'Nothing inside yet.' : `Inside · ${level.length}`}</Text>
         )}
-        {going.map(row => fullCard(row, false))}
-        {finished.slice(0, SHOWN_FINISHED).map(lineRow)}
+        {going.map(card)}
+        {finished.slice(0, SHOWN_FINISHED).map(card)}
         {hidden > 0 && <Text dimColor>+{hidden} earlier finished</Text>}
         <Text dimColor>Progress (~) and cost are estimates. Click an agent to open it.</Text>
       </Box>

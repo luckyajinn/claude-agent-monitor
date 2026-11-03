@@ -5,7 +5,10 @@ import {
   capRows,
   childrenOf,
   costOf,
+  costParts,
   describe,
+  fill,
+  finish,
   isKnownRate,
   newRow,
   prettyModel,
@@ -136,6 +139,38 @@ test('the pure helpers classify, price, estimate and shape', () => {
   expect(again.steps).toBe(0)
   expect(again.costUsd).toBe(row.costUsd)
   expect(revive(row, 9)).toBe(row)
+
+  // A row kept from an earlier version gets the newer fields' defaults.
+  const old = fill({ id: 'old', name: 'Old', model: MODEL })
+  expect(old.log).toEqual([])
+  expect(old.effort).toBeNull()
+  expect(old.parentId).toBeNull()
+  expect(old.name).toBe('Old')
+
+  // The cost split adds up to the whole, and every step lands in the log.
+  const parts = costParts(USAGE)
+  expect(Math.round((parts.input + parts.output + parts.cache) * 1e6)).toBe(10500)
+  const stepped = applyStep(newRow('s', 's', 'x', MODEL, 0), USAGE, [{ name: 'Bash', input: { command: 'npm test' } }, { name: 'Read', input: {} }], '', {
+    effort: 'high',
+    messages: 7,
+    stop: 'tool_use',
+  })
+  expect(stepped.log).toEqual(['1. Verifying · npm test (+1)'])
+  expect(stepped.effort).toBe('high')
+  expect(stepped.messages).toBe(7)
+  expect(stepped.contextTokens).toBe(1000)
+  expect(Math.round(stepped.costInUsd * 1e6)).toBe(3000)
+  expect(Math.round(stepped.costOutUsd * 1e6)).toBe(7500)
+  expect(finish(stepped, 'done', 5).status).toBe('done')
+  // A failed request (no stop reason) keeps the last one known.
+  expect(applyStep(stepped, null, [], '', { stop: null }).stop).toBe('tool_use')
+  // The log keeps only the last eight steps.
+  let long = newRow('l', 'l', 'x', MODEL, 0)
+  for (let i = 0; i < 12; i += 1) {
+    long = applyStep(long, null, [], 'text')
+  }
+  expect(long.log.length).toBe(8)
+  expect(long.log[7]).toBe('12. Writing report')
 })
 
 test('the cap drops finished rows first, and the tree helpers walk parents', () => {
@@ -183,11 +218,65 @@ test('a subagent appears, works and finishes in the pane', async ($, on) => {
 
   await $.turn.complete({ ...END, agentId: 'a1' })
 
-  // Finished, it shrinks to one line: a tick, the name, the time and the cost.
+  // Finished, it stays an expanded card: a tick, the name, 100% and the crab.
   ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await ui.find({ type: 'Text', text: /✔/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Scout the repo/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /100%/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /~14%/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Svg' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('clicking an agent opens its detail: task, model, progress, tokens, cost, log', async ($, on) => {
+  engine(on)
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.agent.spawn({ ...SPAWN, prompt: 'Find every TODO in the repo and list them' })
+  for await (const _chunk of $.turn.step({ ...STEP, effort: 'high', agentId: 'a1' })) {
+    // Drained for its effect on the card.
+  }
+
+  // The card at the top level has no detail rows yet.
+  let ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /Cache read/ })).toBeUndefined()
+  await ui.press({ key: 'open-a1' })
+  await ui.unmount()
+
+  ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  for (const text of [
+    /Task/,
+    /Find every TODO in the repo/,
+    /Sonnet 5\.5/,
+    /claude-sonnet-5-5/,
+    /Explore/,
+    /Effort/,
+    /high/,
+    /in the background/,
+    /Steps/,
+    /Messages/,
+    /Last stop/,
+    /tool_use/,
+    /Input \(uncached\)/,
+    /Cache read/,
+    /Cache write/,
+    /Total in/,
+    /Context now/,
+    /Cost \(est\.\)/,
+    /1\. Researching · Grep TODO/,
+  ]) {
+    expect(await ui.find({ type: 'Text', text })).toBeDefined()
+  }
+  // Nothing is inside it, and the crumbs show where we are.
+  expect(await ui.find({ type: 'Text', text: /Nothing inside yet/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: 'crumb-root' })).toBeDefined()
+  await ui.unmount()
+
+  // Once it finishes its report is there too.
+  await $.turn.complete({ ...END, agentId: 'a1', answer: 'Found 3 TODOs.', usage: USAGE })
+  ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /Report/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Found 3 TODOs\./ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -378,6 +467,56 @@ test('Clear all empties the pane', async ($, on) => {
   ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect((await ui.find({ type: 'Text' }))?.text).toContain('No subagents yet')
   await ui.unmount()
+})
+
+test('state saved by an older version still draws, in a narrow pane too', async ($, on) => {
+  engine(on)
+  // The shape the first version stored: no parent, log, effort or cost split.
+  const legacy = {
+    id: 'old1',
+    name: 'Legacy agent',
+    type: 'Explore',
+    model: MODEL,
+    status: 'done',
+    steps: 3,
+    activity: 'Done',
+    detail: '',
+    inputTokens: 10,
+    outputTokens: 20,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    costUsd: 0.5,
+    startedAt: 0,
+    endedAt: 4000,
+  }
+  on('state.get', (_: unknown, e: { key?: string }) => ({
+    value: { value: e.key === 'path' ? [] : [legacy], version: 1 },
+  }))
+
+  for (const bodyColumns of [30, 70]) {
+    const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns }, surface: 'desktop' })
+    expect(await ui.find({ type: 'Text', text: /Legacy agent/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /\$0\.50 est\./ })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('the task and report stay out of shared state', async ($, on) => {
+  engine(on)
+  const written: unknown[] = []
+  on('state.set', (_: unknown, e: unknown) => {
+    written.push(e)
+
+    return { value: { version: 1 } }
+  })
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.agent.spawn({ ...SPAWN, prompt: 'SECRET-TASK-TEXT' })
+  await $.turn.complete({ ...END, agentId: 'a1', answer: 'SECRET-REPORT-TEXT', usage: USAGE })
+
+  expect(written.length).toBeGreaterThan(0)
+  expect(JSON.stringify(written)).not.toContain('SECRET-TASK-TEXT')
+  expect(JSON.stringify(written)).not.toContain('SECRET-REPORT-TEXT')
 })
 
 test('the terminal draws the same cards as text', async ($, on) => {
