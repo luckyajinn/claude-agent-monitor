@@ -6,6 +6,7 @@ import { barSvg, crabSvg } from './crab'
 import {
   addUsage,
   applyStep,
+  etaOf,
   bar,
   capRows,
   childrenOf,
@@ -237,6 +238,7 @@ export const register: Register = on => {
               effort: e.effort,
               messages: e.messageCount,
               stop: result.stopReason,
+              now,
             }),
           ),
         )
@@ -338,6 +340,7 @@ export const register: Register = on => {
           {isNarrow ? activity : null}
           <Text dimColor>
             {prettyModel(row.model) || 'model unknown'} · {spent(row)} · {plural(row.steps, 'step')}
+            {etaOf(row, now) === null ? '' : ` · ${etaOf(row, now)}`}
           </Text>
           <Box gap={1} alignItems="center">
             {!hasSvg ? (
@@ -457,6 +460,7 @@ export const register: Register = on => {
             {kv('Status', row.status)}
             {kv('Steps', String(row.steps))}
             {kv('Time', spent(row))}
+            {etaOf(row, now) === null ? null : kv('ETA', etaOf(row, now)!)}
             {kv('Messages', String(row.messages))}
             {kv('Last stop', row.stop ?? 'none yet')}
           </Box>
@@ -545,7 +549,7 @@ export const register: Register = on => {
         {going.map(card)}
         {finished.slice(0, SHOWN_FINISHED).map(card)}
         {hidden > 0 && <Text dimColor>+{hidden} earlier finished</Text>}
-        <Text dimColor>Progress (~) and cost are estimates. Click an agent to open it.</Text>
+        <Text dimColor>Progress (~), time left and cost are estimates. Click an agent to open it.</Text>
       </Box>
     )
   })

@@ -7,6 +7,10 @@ import {
   costOf,
   costParts,
   describe,
+  ETA_IDLE_MS,
+  ETA_MIN_MS,
+  ETA_MIN_STEPS,
+  etaOf,
   fill,
   finish,
   isKnownRate,
@@ -173,6 +177,54 @@ test('the pure helpers classify, price, estimate and shape', () => {
   }
   expect(long.log.length).toBe(8)
   expect(long.log[7]).toBe('12. Writing report')
+})
+
+test('the ETA waits for a basis, counts down between steps, and admits when it is no use', () => {
+  // 6 steps is 50% on the curve; the latest step landed 50s in, so the total
+  // is 100s: at 60s there are 40s left, which rounds to the nearest 30s.
+  const row = { ...newRow('a', 'x', 'Explore', MODEL, 0), steps: 6, lastStepAt: 50_000 }
+  expect(etaOf(row, 60_000)).toBe('~30s left')
+  // Counting down between steps: 20s later the same row has 20s left.
+  expect(etaOf(row, 80_000)).toBe('<30s left')
+  // Reaching the total with a recent step: overdue.
+  expect(etaOf(row, 100_000)).toBe('taking longer than expected')
+  // No step for two minutes: the estimate has failed, even with time on the clock.
+  const early = { ...row, steps: 3, lastStepAt: 60_000 }
+  expect(etaOf(early, 60_000 + ETA_IDLE_MS)).toBe('taking longer than expected')
+  expect(etaOf(early, 60_000 + ETA_IDLE_MS - 1)).toBe('<30s left')
+
+  // Too few steps, too soon, finished, or a row with no step time: nothing.
+  expect(etaOf({ ...row, steps: ETA_MIN_STEPS - 1 }, 60_000)).toBeNull()
+  expect(etaOf(row, ETA_MIN_MS - 1)).toBeNull()
+  expect(etaOf({ ...row, status: 'done' }, 60_000)).toBeNull()
+  expect(etaOf({ ...row, lastStepAt: 0 }, 60_000)).toBeNull()
+  expect(etaOf(fill({ id: 'old', steps: 6, startedAt: 0 }), 60_000)).toBeNull()
+
+  // Near the flat end of the curve a number would mislead.
+  expect(etaOf({ ...row, steps: 60 }, 60_000)).toBe('finishing')
+
+  // Minutes: nearest 30s to five minutes, nearest minute after.
+  const slow = { ...newRow('b', 'x', 'Explore', MODEL, 0), steps: 6, lastStepAt: 100_000 }
+  expect(etaOf(slow, 100_000)).toBe('~1m 30s left')
+  expect(etaOf({ ...slow, lastStepAt: 1_000_000 }, 1_000_000)).toBe('~17m left')
+
+  // A step stamps its time; a revived agent starts the clock over.
+  const stepped = applyStep(newRow('c', 'x', 'Explore', MODEL, 0), USAGE, [], '', { now: 7000 })
+  expect(stepped.lastStepAt).toBe(7000)
+  expect(revive({ ...stepped, status: 'done' }, 9000).lastStepAt).toBe(9000)
+})
+
+test('the card and the detail show the ETA of a running agent', async ($, on) => {
+  engine(on)
+  // The test clock stands at 1000: 60s in, 6 steps (50%), latest step 10s ago.
+  const running = { ...newRow('r1', 'Slow scout', 'Explore', MODEL, -59_000), steps: 6, lastStepAt: -9000 }
+  on('state.get', (_: unknown, e: { key?: string }) => ({
+    value: { value: e.key === 'path' ? [] : [running], version: 1 },
+  }))
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /~30s left/ })).toBeDefined()
+  await ui.unmount()
 })
 
 test('the cap drops finished rows first, and the tree helpers walk parents', () => {

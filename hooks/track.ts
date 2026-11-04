@@ -97,6 +97,50 @@ export const progressOf = (row: AgentRow): number =>
     ? 100
     : Math.min(95, Math.round((100 * row.steps) / (row.steps + 6)))
 
+// The ETA shows only once there is some basis for it.
+export const ETA_MIN_STEPS = 3
+export const ETA_MIN_MS = 20_000
+// No step for this long: the estimate has failed, so say so.
+export const ETA_IDLE_MS = 120_000
+// Past this progress the curve is flat, so a number would only mislead.
+export const ETA_FINISHING = 90
+
+// Coarse on purpose: nearest 30s up to five minutes, nearest minute after.
+const etaClock = (ms: number): string => {
+  const seconds = ms <= 300_000 ? Math.round(ms / 30_000) * 30 : Math.round(ms / 60_000) * 60
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+
+  return m === 0 ? `${s}s` : s === 0 ? `${m}m` : `${m}m ${s}s`
+}
+
+// A rough time left for a running agent, from the progress curve: the pace up
+// to its latest step gives a total, and the clock counts that total down
+// between steps. Null while there is no basis (too few steps, too soon, or a
+// row from an earlier version with no step time); a plain phrase when the
+// estimate is no use (nearly through the curve, or overdue).
+export const etaOf = (row: AgentRow, now: number): string | null => {
+  if (
+    row.status !== 'running' ||
+    row.steps < ETA_MIN_STEPS ||
+    now - row.startedAt < ETA_MIN_MS ||
+    row.lastStepAt <= row.startedAt
+  ) {
+    return null
+  }
+  const percent = progressOf(row)
+
+  if (now - row.lastStepAt >= ETA_IDLE_MS) {
+    return 'taking longer than expected'
+  }
+  if (percent >= ETA_FINISHING) {
+    return 'finishing'
+  }
+  const left = ((row.lastStepAt - row.startedAt) * 100) / percent - (now - row.startedAt)
+
+  return left <= 0 ? 'taking longer than expected' : left < 30_000 ? '<30s left' : `~${etaClock(left)} left`
+}
+
 export const newRow = (
   id: string,
   name: string,
@@ -132,6 +176,7 @@ export const newRow = (
   costCacheUsd: 0,
   startedAt: now,
   endedAt: null,
+  lastStepAt: now,
   ...extra,
 })
 
@@ -158,6 +203,7 @@ export const revive = (row: AgentRow, now: number): AgentRow =>
         status: 'running',
         endedAt: null,
         startedAt: now,
+        lastStepAt: now,
         steps: 0,
         activity: 'Starting',
         detail: '',
@@ -266,7 +312,7 @@ export const applyStep = (
   usage: Usage | null,
   toolUses: ReadonlyArray<{ name: string; input: unknown }>,
   answer: string,
-  meta: { effort?: string | number | null; messages?: number; stop?: string | null } = {},
+  meta: { effort?: string | number | null; messages?: number; stop?: string | null; now?: number } = {},
 ): AgentRow => {
   const first = toolUses[0]
   const next = first
@@ -282,6 +328,7 @@ export const applyStep = (
       ...row,
       ...next,
       steps: row.steps + 1,
+      lastStepAt: meta.now ?? row.lastStepAt,
       log: [...row.log, line].slice(-LOG_LINES),
       effort: meta.effort === undefined || meta.effort === null ? row.effort : String(meta.effort),
       messages: meta.messages ?? row.messages,

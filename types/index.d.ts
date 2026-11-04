@@ -33,6 +33,8 @@ export type AgentRow = {
   costCacheUsd: number
   startedAt: number
   endedAt: number | null
+  /** When its latest step landed; the ETA counts down from it. 0 on rows from an earlier version. */
+  lastStepAt: number
 }
 
 declare module 'claude-code' {
