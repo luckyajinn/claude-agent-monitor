@@ -20,7 +20,9 @@ import {
   progressOf,
   revive,
   rootsOf,
+  survivors,
   tokens,
+  trailAfter,
   trunc,
   usd,
   validTrail,
@@ -68,6 +70,38 @@ type SvgElement = (props: {
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
+// The ids the engine lists as still going (pending, running or waiting);
+// undefined when its list cannot be read.
+const goingIds = async ($: EngineInterface): Promise<Set<string> | undefined> => {
+  try {
+    return new Set((await $.agent.list()).filter(one => LIVE.has(one.status)).map(one => one.id))
+  } catch {
+    return undefined
+  }
+}
+
+// An agent is active when its card says it is running or the engine lists it
+// as going: the engine can call an agent pending or waiting where the card has
+// only "running" or an end. With no list to ask, the card alone decides.
+const activeIn = (going: Set<string> | undefined) => (row: AgentRow) =>
+  LIVE.has(row.status) || going?.has(row.id) === true
+
+// "Clear finished": drops the cards of agents that are done, stopped or failed
+// and keeps every active agent, with the parents it sits under. The rows are
+// judged inside the write, so one that came alive since the pane was drawn
+// stays. The breadcrumb is cut back only if a card it names went.
+const clearFinished = async ($: EngineInterface) => {
+  const isActive = activeIn(await goingIds($))
+
+  await update($, agents, list => {
+    const kept = survivors(list, isActive)
+
+    return kept.length === list.length ? list : kept
+  })
+  const left = await read($, agents)
+  await update($, path, trail => trailAfter(left, trail))
+}
+
 // A step or an end can reach us before, or without, the spawn that announces
 // an agent: make its card from what the engine lists, so no event is lost.
 const ensure = async ($: EngineInterface, id: string, model: string, now: number) => {
@@ -110,25 +144,20 @@ export const register: Register = on => {
   })
 
   // The pane keeps the latest prompt's work only: when the person sends a new
-  // prompt, finished cards go, and so does any "running" card the engine no
-  // longer lists as going (a missed end must not leave one stuck for good). A
-  // slash command, a background notification or another plugin's prompt is not
-  // a new prompt.
+  // prompt, finished cards go (all but a parent of a card still going), and so
+  // does any "running" card the engine no longer lists as going (a missed end
+  // must not leave one stuck for good). A slash command, a background
+  // notification or another plugin's prompt is not a new prompt.
   on('prompt.submit', async ($, e, next) => {
     const isPerson = e.origin?.kind === 'composer' || e.origin?.kind === 'bridge'
 
     if (isPerson && e.command === undefined) {
       try {
-        let live: Set<string> | undefined
-        try {
-          live = new Set(
-            (await $.agent.list()).filter(one => LIVE.has(one.status)).map(one => one.id),
-          )
-        } catch {
-          live = undefined
-        }
+        const live = await goingIds($)
+        // A finished parent with one of these beneath it stays, so a running
+        // agent is never left without the card it is shown inside.
         await update($, agents, list =>
-          list.filter(row => row.status === 'running' && (live === undefined || live.has(row.id))),
+          survivors(list, row => row.status === 'running' && (live === undefined || live.has(row.id))),
         )
         await update($, path, () => [])
       } catch {
@@ -263,6 +292,16 @@ export const register: Register = on => {
     const nameMax = isNarrow ? 18 : 28
     const running = all.filter(row => row.status === 'running').length
     const total = all.reduce((sum, row) => sum + row.costUsd, 0)
+    // What "Clear finished" would do now, so the button can say so: active
+    // agents stay, and so does a finished parent that has one beneath it.
+    const isActive = activeIn(await goingIds($))
+    const active = all.filter(isActive).length
+    const clearable = all.length - survivors(all, isActive).length
+    const parents = all.length - clearable - active
+    const staying =
+      active === 0
+        ? ''
+        : `${active} still running ${active === 1 ? 'stays' : 'stay'}${parents > 0 ? `, with ${plural(parents, 'finished parent')}` : ''}`
     // The one dollar figure the engine really keeps; it has none per agent.
     let session: number | undefined
     try {
@@ -471,14 +510,15 @@ export const register: Register = on => {
             {usd(total)} est.{session === undefined ? '' : ` · session ${usd(session)}`}
           </Text>
         </Box>
-        <Button
-          key="clear"
-          label="Clear all"
-          onPress={async () => {
-            await update($, agents, () => [])
-            await update($, path, () => [])
-          }}
-        />
+        <Box gap={1} flexWrap="wrap" alignItems="center">
+          <Button
+            key="clear"
+            label={clearable === 0 ? 'Clear finished' : `Clear finished (${clearable})`}
+            dimColor={clearable === 0}
+            onPress={() => clearFinished($)}
+          />
+          {staying === '' ? null : <Text dimColor>{staying}</Text>}
+        </Box>
         {trail.length > 0 && (
           <Box gap={1} flexWrap="wrap">
             <Button key="crumb-root" plain label="Agents" onPress={() => update($, path, () => [])} />

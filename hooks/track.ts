@@ -201,6 +201,35 @@ export const validTrail = (list: AgentRow[], trail: readonly string[]): string[]
   return kept
 }
 
+// What a clear leaves behind: every row `isActive` calls going, and every
+// ancestor of one, so no card ever sits in the tree without the parent it was
+// opened from. The rest (finished, with nothing going beneath) is what goes.
+export const survivors = (list: AgentRow[], isActive: (row: AgentRow) => boolean): AgentRow[] => {
+  const byId = new Map(list.map(row => [row.id, row]))
+  const keep = new Set<string>()
+
+  for (const row of list) {
+    if (!isActive(row)) {
+      continue
+    }
+    let at: AgentRow | undefined = row
+
+    // An ancestor already kept has its own ancestors kept: stop there (this
+    // also ends a loop, should a parent ever name a child).
+    while (at !== undefined && !keep.has(at.id)) {
+      keep.add(at.id)
+      at = at.parentId == null ? undefined : byId.get(at.parentId)
+    }
+  }
+
+  return list.filter(row => keep.has(row.id))
+}
+
+// The breadcrumb after rows went: untouched while every card it names is still
+// there, else cut back to the longest part that is.
+export const trailAfter = (list: AgentRow[], trail: string[]): string[] =>
+  trail.every(id => list.some(row => row.id === id)) ? trail : validTrail(list, trail)
+
 // Running agents first, then finished ones; newest first within each.
 export const ordered = (rows: AgentRow[]): AgentRow[] => {
   const newest = [...rows].reverse()

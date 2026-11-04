@@ -15,6 +15,8 @@ import {
   progressOf,
   revive,
   rootsOf,
+  survivors,
+  trailAfter,
   trunc,
   usd,
   validTrail,
@@ -190,6 +192,40 @@ test('the cap drops finished rows first, and the tree helpers walk parents', () 
   expect(validTrail(tree, ['p', 'k', 'g'])).toEqual(['p', 'k', 'g'])
   expect(validTrail(tree, ['p', 'g'])).toEqual(['p'])
   expect(validTrail(tree, ['gone', 'k'])).toEqual([])
+})
+
+test('a clear keeps the active rows and every ancestor of one, and trims the trail only when needed', () => {
+  const r = (id: string, status: 'running' | 'done', parentId: string | null = null) => ({
+    ...newRow(id, id, 'x', MODEL, 0, parentId),
+    status,
+  })
+  const isRunning = (row: { status: string }) => row.status === 'running'
+  const ids = (rows: { id: string }[]) => rows.map(row => row.id)
+
+  // p > k > g (running); q finished with a finished child; z running alone.
+  const tree = [r('p', 'done'), r('k', 'done', 'p'), r('g', 'running', 'k'), r('q', 'done'), r('qc', 'done', 'q'), r('z', 'running')]
+  expect(ids(survivors(tree, isRunning))).toEqual(['p', 'k', 'g', 'z'])
+  // Nothing active: nothing stays. Everything active: everything stays.
+  expect(survivors(tree, () => false)).toEqual([])
+  expect(survivors(tree, () => true)).toEqual(tree)
+  // Order and the rows themselves are kept.
+  expect(survivors(tree, isRunning)[0]).toBe(tree[0])
+
+  // A parent that is gone does not stop the walk; a parent loop cannot hang it.
+  expect(ids(survivors([r('c', 'running', 'lost'), r('d', 'done')], isRunning))).toEqual(['c'])
+  expect(ids(survivors([r('x', 'running', 'y'), r('y', 'done', 'x')], isRunning))).toEqual(['x', 'y'])
+  // A row from an older version has no parent field at all.
+  const old = { ...r('old', 'running'), parentId: undefined } as never
+  expect(ids(survivors([old], isRunning))).toEqual(['old'])
+
+  // The trail is left alone while every card it names is there, else cut back.
+  const left = survivors(tree, isRunning)
+  const same = ['p', 'k']
+  expect(trailAfter(left, same)).toBe(same)
+  expect(trailAfter(left, [])).toEqual([])
+  expect(trailAfter(left, ['p', 'k', 'g'])).toEqual(['p', 'k', 'g'])
+  expect(trailAfter(left, ['q'])).toEqual([])
+  expect(trailAfter(left, ['p', 'q'])).toEqual(['p'])
 })
 
 test('a subagent appears, works and finishes in the pane', async ($, on) => {
@@ -454,19 +490,456 @@ test('clicking an agent opens it like a folder, with a breadcrumb back', async (
   })
 })
 
-test('Clear all empties the pane', async ($, on) => {
-  engine(on)
+// Helpers for the "Clear finished" tests. `$` is the kit's engine; it is typed
+// loosely here so one helper serves every test.
+const spawn = ($: any, description: string, parentAgentId?: string) =>
+  $.agent.spawn({
+    ...SPAWN,
+    tool_use_id: `t-${description}`,
+    description,
+    ...(parentAgentId === undefined ? {} : { parentAgentId }),
+  })
 
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  await $.agent.spawn(SPAWN)
+const end = ($: any, agentId: string, ending: 'done' | 'stopped' | 'failed' = 'done') =>
+  $.turn.complete({
+    ...END,
+    agentId,
+    usage: USAGE,
+    ...(ending === 'stopped' ? { isAborted: true, reason: 'aborted' } : {}),
+    ...(ending === 'failed' ? { reason: 'error' } : {}),
+  })
 
-  let ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+// Mounts the pane, hands it to `check`, unmounts.
+const inPane = async ($: any, check: (ui: any) => Promise<unknown>, surface = 'desktop') => {
+  const ui = await $.ui.mount({ ...PANE, surface })
+  try {
+    return await check(ui)
+  } finally {
+    await ui.unmount()
+  }
+}
+
+const pressed = ($: any, key: string, surface = 'desktop') => inPane($, ui => ui.press({ key }), surface)
+
+const shows = (ui: any, text: RegExp) => ui.find({ type: 'Text', text }).then((found: unknown) => found !== undefined)
+
+// The Clear button as drawn: its label, whether it is dimmed, and the note
+// beside it (undefined when there is none).
+const clearButton = ($: any, surface = 'desktop') =>
+  inPane(
+    $,
+    async ui => {
+      const button = await ui.find({ type: 'Button', key: 'clear' })
+      const note = await ui.find({ type: 'Text', text: /still running/ })
+
+      return { label: button?.props.label, isDim: button?.props.dimColor === true, note: note?.text }
+    },
+    surface,
+  ) as Promise<{ label: string | undefined; isDim: boolean; note: string | undefined }>
+
+// Stands in for the engine's state store, so a test can read what the mod
+// wrote (the test's `$` has no `state` of its own). Returns a reader by key.
+const keepState = (on: (event: string, hook: (...args: any[]) => unknown) => unknown) => {
+  const held = new Map<string, { value: unknown; version: number }>()
+  const at = (e: { plugin: string; key: string }) => `${e.plugin}/${e.key}`
+
+  on('state.get', (_: unknown, e: { plugin: string; key: string }) => ({
+    value: held.get(at(e)) ?? { value: undefined, version: 0 },
+  }))
+  on('state.set', (_: unknown, e: { plugin: string; key: string; value: unknown; ifVersion?: number }) => {
+    const now = held.get(at(e)) ?? { value: undefined, version: 0 }
+
+    if (e.ifVersion !== undefined && e.ifVersion !== now.version) {
+      return { value: { isSet: false, version: now.version } }
+    }
+    held.set(at(e), { value: e.value, version: now.version + 1 })
+
+    return { value: { isSet: true, version: now.version + 1 } }
+  })
+
+  return (key: string) => held.get(`agent-monitor/${key}`)?.value
+}
+
+const START = { cwd: '/', surface: 'desktop', isInteractive: true } as const
+
+test('Clear finished empties a pane of finished agents', async ($, on) => {
+  engine(on, {}, ['a1', 'b1', 'c1'])
+
+  await $.session.start(START)
+  await spawn($, 'Scout the repo')
+  await spawn($, 'Lint the code')
+  await spawn($, 'Stop the build')
+  await end($, 'a1')
+  await end($, 'b1', 'failed')
+  await end($, 'c1', 'stopped')
+
+  // Nothing is going, so the button is live and says how many it will clear.
+  expect(await clearButton($)).toEqual({ label: 'Clear finished (3)', isDim: false, note: undefined })
+
+  await pressed($, 'clear')
+
+  await inPane($, async ui => {
+    expect((await ui.find({ type: 'Text' }))?.text).toContain('No subagents yet')
+  })
+})
+
+test('Clear finished never removes a running agent; finished ones go', async ($, on) => {
+  engine(on, {}, ['a1', 'b1', 'c1', 'd1'])
+
+  await $.session.start(START)
+  await spawn($, 'Scout the repo')
+  await spawn($, 'Write the tests')
+  await spawn($, 'Lint the code')
+  await spawn($, 'Stop the build')
+  await end($, 'b1')
+  await end($, 'c1', 'failed')
+  await end($, 'd1', 'stopped')
+
+  await pressed($, 'clear')
+
+  await inPane($, async ui => {
+    expect(await shows(ui, /Scout the repo/)).toBe(true)
+    expect(await shows(ui, /Write the tests/)).toBe(false)
+    expect(await shows(ui, /Lint the code/)).toBe(false)
+    expect(await shows(ui, /Stop the build/)).toBe(false)
+    expect(await shows(ui, /1 agent/)).toBe(true)
+    expect(await shows(ui, /1 running/)).toBe(true)
+  })
+
+  // Pressing it again changes nothing: it is still running.
+  await pressed($, 'clear')
+  await inPane($, async ui => {
+    expect(await shows(ui, /Scout the repo/)).toBe(true)
+  })
+
+  // Once it ends, the next clear takes it.
+  await end($, 'a1')
+  await pressed($, 'clear')
+  await inPane($, async ui => {
+    expect((await ui.find({ type: 'Text' }))?.text).toContain('No subagents yet')
+  })
+})
+
+test('Clear finished keeps an agent the engine lists as pending or waiting', async ($, on) => {
+  let listed: { id: string; status: string }[] = []
+  engine(on, { list: () => ({ value: listed }) }, ['a1', 'b1', 'c1', 'd1', 'e1'])
+
+  await $.session.start(START)
+  for (const name of ['Pending one', 'Waiting one', 'Completed one', 'Idle one', 'Killed one']) {
+    await spawn($, name)
+  }
+  // Every card has ended; the engine still has two of them going.
+  for (const id of ['a1', 'b1', 'c1', 'd1', 'e1']) {
+    await end($, id)
+  }
+  listed = [
+    { id: 'a1', status: 'pending' },
+    { id: 'b1', status: 'waiting' },
+    { id: 'c1', status: 'completed' },
+    { id: 'd1', status: 'idle' },
+    { id: 'e1', status: 'killed' },
+  ]
+
+  // The button counts the three it will clear and names the two that stay.
+  expect(await clearButton($)).toEqual({
+    label: 'Clear finished (3)',
+    isDim: false,
+    note: '2 still running stay',
+  })
+
+  await pressed($, 'clear')
+
+  await inPane($, async ui => {
+    expect(await shows(ui, /Pending one/)).toBe(true)
+    expect(await shows(ui, /Waiting one/)).toBe(true)
+    expect(await shows(ui, /Completed one/)).toBe(false)
+    expect(await shows(ui, /Idle one/)).toBe(false)
+    expect(await shows(ui, /Killed one/)).toBe(false)
+  })
+
+  // When the engine says they are over, they clear like any finished card.
+  listed = []
+  await pressed($, 'clear')
+  await inPane($, async ui => {
+    expect((await ui.find({ type: 'Text' }))?.text).toContain('No subagents yet')
+  })
+})
+
+test('with no list from the engine, Clear finished goes by the cards alone', async ($, on) => {
+  engine(
+    on,
+    {
+      list: () => {
+        throw new Error('no list')
+      },
+    },
+    ['a1', 'b1'],
+  )
+
+  await $.session.start(START)
+  await spawn($, 'Scout the repo')
+  await spawn($, 'Write the tests')
+  await end($, 'b1')
+
+  await pressed($, 'clear')
+
+  await inPane($, async ui => {
+    expect(await shows(ui, /Scout the repo/)).toBe(true)
+    expect(await shows(ui, /Write the tests/)).toBe(false)
+  })
+})
+
+test('a finished parent of an active agent stays; finished siblings and strays go', async ($, on) => {
+  engine(on, {}, ['a1', 'b1', 'c1', 'd1', 'e1'])
+
+  await $.session.start(START)
+  await spawn($, 'Scout the repo') // a1, a root
+  await spawn($, 'Read the docs', 'a1') // b1, inside a1
+  await spawn($, 'Open the file', 'b1') // c1, inside b1: still running
+  await spawn($, 'Unrelated job') // d1, another root
+  await spawn($, 'Old helper', 'a1') // e1, inside a1
+  for (const id of ['a1', 'b1', 'd1', 'e1']) {
+    await end($, id)
+  }
+
+  // Three stay: the running agent and the two parents above it.
+  expect(await clearButton($)).toEqual({
+    label: 'Clear finished (2)',
+    isDim: false,
+    note: '1 still running stays, with 2 finished parents',
+  })
+
+  await pressed($, 'clear')
+
+  // At the top: the finished parent is still there, with one agent inside.
+  await inPane($, async ui => {
+    expect(await shows(ui, /Scout the repo/)).toBe(true)
+    expect(await shows(ui, /▸ 1/)).toBe(true)
+    expect(await shows(ui, /Unrelated job/)).toBe(false)
+  })
+
+  // Walk down to the running agent: every folder on the way is still there.
+  await pressed($, 'open-a1')
+  await inPane($, async ui => {
+    expect(await shows(ui, /Read the docs/)).toBe(true)
+    expect(await shows(ui, /Old helper/)).toBe(false)
+    expect(await shows(ui, /Inside · 1/)).toBe(true)
+  })
+  await pressed($, 'open-b1')
+  await inPane($, async ui => {
+    expect(await shows(ui, /Open the file/)).toBe(true)
+    expect(await shows(ui, /Inside · 1/)).toBe(true)
+  })
+
+  // When the running one ends, everything above it is clearable too.
+  await end($, 'c1')
+  await pressed($, 'clear')
+  await inPane($, async ui => {
+    expect((await ui.find({ type: 'Text' }))?.text).toContain('No subagents yet')
+  })
+})
+
+test('Clear finished keeps the breadcrumb pointing at cards that are still there', async ($, on) => {
+  engine(on, {}, ['a1', 'b1', 'c1'])
+  const held = keepState(on)
+
+  await $.session.start(START)
+  await spawn($, 'Scout the repo') // a1
+  await spawn($, 'Read the docs', 'a1') // b1: finished, nothing running beneath it
+  await spawn($, 'Open the file', 'a1') // c1: running
+  await end($, 'a1')
+  await end($, 'b1')
+
+  // Open a1, then b1: the breadcrumb is a1 › b1.
+  await pressed($, 'open-a1')
+  await pressed($, 'open-b1')
+  expect(held('path')).toEqual(['a1', 'b1'])
+
+  // b1 goes (finished, a leaf); a1 stays for c1. The crumbs shrink to a1.
+  await pressed($, 'clear')
+  expect(held('path')).toEqual(['a1'])
+  await inPane($, async ui => {
+    expect(await ui.find({ type: 'Button', key: 'crumb-root' })).toBeDefined()
+    expect(await shows(ui, /Open the file/)).toBe(true)
+    expect(await shows(ui, /Read the docs/)).toBe(false)
+  })
+
+  // Nothing the crumbs name went this time, so they stay as they are.
+  await pressed($, 'clear')
+  expect(held('path')).toEqual(['a1'])
+
+  // Once c1 ends everything clears, and the crumbs are emptied with it.
+  await end($, 'c1')
+  await pressed($, 'clear')
+  expect(held('path')).toEqual([])
+  await inPane($, async ui => {
+    expect((await ui.find({ type: 'Text' }))?.text).toContain('No subagents yet')
+  })
+})
+
+test('the Clear button is dimmed, and says what stays, when nothing can be cleared', async ($, on) => {
+  engine(on, {}, ['a1', 'b1', 'c1'])
+
+  await $.session.start(START)
+  await spawn($, 'Scout the repo')
+  await spawn($, 'Write the tests')
+
+  // Two running, nothing finished: the button is dimmed, the note says why.
+  expect(await clearButton($)).toEqual({
+    label: 'Clear finished',
+    isDim: true,
+    note: '2 still running stay',
+  })
+  // The terminal draws the same button and the same note as text.
+  expect(await clearButton($, 'terminal')).toEqual({
+    label: 'Clear finished',
+    isDim: true,
+    note: '2 still running stay',
+  })
+
+  // Pressing the dimmed button does nothing.
+  await pressed($, 'clear')
+  await inPane($, async ui => {
+    expect(await shows(ui, /Scout the repo/)).toBe(true)
+    expect(await shows(ui, /Write the tests/)).toBe(true)
+    expect(await shows(ui, /2 running/)).toBe(true)
+  })
+
+  // One ends: the button wakes up with a count, and the note shrinks.
+  await end($, 'a1')
+  expect(await clearButton($)).toEqual({
+    label: 'Clear finished (1)',
+    isDim: false,
+    note: '1 still running stays',
+  })
+  expect(await clearButton($, 'terminal')).toEqual({
+    label: 'Clear finished (1)',
+    isDim: false,
+    note: '1 still running stays',
+  })
+
+  // A parent that is finished but holds a running agent counts as staying:
+  // only a1 can be cleared, and the note names the parent that stays.
+  await spawn($, 'Nested', 'b1')
+  await end($, 'b1')
+  expect(await clearButton($)).toEqual({
+    label: 'Clear finished (1)',
+    isDim: false,
+    note: '1 still running stays, with 1 finished parent',
+  })
+})
+
+test('pressing Clear finished looks at the agents as they are now, not as drawn', async ($, on) => {
+  engine(on, {}, ['a1'])
+
+  await $.session.start(START)
+  await spawn($, 'Scout the repo')
+
+  // Drawn while it runs: the button is dimmed. The agent ends, then the press
+  // arrives: the press looks at the agents as they are now, not as drawn.
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.find({ type: 'Button', key: 'clear' }))?.props.dimColor).toBe(true)
+  await end($, 'a1')
   await ui.press({ key: 'clear' })
   await ui.unmount()
 
-  ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await ui.find({ type: 'Text' }))?.text).toContain('No subagents yet')
-  await ui.unmount()
+  await inPane($, async view => {
+    expect((await view.find({ type: 'Text' }))?.text).toContain('No subagents yet')
+  })
+})
+
+test('a new prompt and a lost card are cleared as before, and Clear finished leaves the lost one', async ($, on) => {
+  let listed: { id: string; status: string }[] = []
+  engine(on, { list: () => ({ value: listed }) }, ['a1', 'b1', 'c1', 'd1'])
+  const held = keepState(on)
+
+  await $.session.start(START)
+  await spawn($, 'Scout the repo') // a1: running, and the engine agrees
+  await spawn($, 'Write the tests') // b1: finished
+  await spawn($, 'Lint the code') // c1: says running, but the engine lost it
+  await end($, 'b1')
+  listed = [{ id: 'a1', status: 'running' }]
+
+  // Clear finished takes the finished card only: a card that says "running"
+  // stays even when the engine no longer lists it, until the next prompt.
+  await pressed($, 'clear')
+  await inPane($, async ui => {
+    expect(await shows(ui, /Scout the repo/)).toBe(true)
+    expect(await shows(ui, /Write the tests/)).toBe(false)
+    expect(await shows(ui, /Lint the code/)).toBe(true)
+  })
+
+  // Another finished card, and a breadcrumb that points somewhere.
+  await spawn($, 'Old report')
+  await end($, 'd1')
+  await pressed($, 'open-a1')
+  expect(held('path')).toEqual(['a1'])
+
+  // The person's next prompt, as before: finished work goes, the card the
+  // engine lost goes, the one it still has going stays, and the breadcrumb
+  // starts over.
+  await $.prompt.submit({ text: 'next question', origin: { kind: 'composer' } })
+  expect(held('path')).toEqual([])
+  await inPane($, async ui => {
+    expect(await shows(ui, /Scout the repo/)).toBe(true)
+    expect(await shows(ui, /Old report/)).toBe(false)
+    expect(await shows(ui, /Lint the code/)).toBe(false)
+  })
+})
+
+test('a new prompt keeps a finished parent of an agent still going, so the child is not orphaned', async ($, on) => {
+  let listed: { id: string; status: string }[] = []
+  engine(on, { list: () => ({ value: listed }) }, ['a1', 'b1', 'c1', 'd1', 'e1'])
+  const held = keepState(on)
+
+  await $.session.start(START)
+  await spawn($, 'Scout the repo') // a1: a root, finished
+  await spawn($, 'Read the docs', 'a1') // b1: inside a1, finished, a parent
+  await spawn($, 'Open the file', 'b1') // c1: inside b1, still going
+  await spawn($, 'Old helper', 'a1') // d1: inside a1, finished
+  await spawn($, 'Unrelated job') // e1: another root, finished
+  for (const id of ['a1', 'b1', 'd1', 'e1']) {
+    await end($, id)
+  }
+  listed = [{ id: 'c1', status: 'running' }]
+
+  // Open a1 first, so the breadcrumb has something to start over from.
+  await pressed($, 'open-a1')
+  expect(held('path')).toEqual(['a1'])
+
+  await $.prompt.submit({ text: 'next question', origin: { kind: 'composer' } })
+
+  // The breadcrumb starts over, as it always did.
+  expect(held('path')).toEqual([])
+
+  // At the top: the finished parent is there with one agent inside, and the
+  // header counts match what is drawn (it used to say "1 running" over nothing).
+  await inPane($, async ui => {
+    expect(await shows(ui, /Scout the repo/)).toBe(true)
+    expect(await shows(ui, /▸ 1/)).toBe(true)
+    expect(await shows(ui, /Unrelated job/)).toBe(false)
+    expect(await shows(ui, /1 running/)).toBe(true)
+  })
+
+  // Walk down: every folder on the way to the running agent is still there,
+  // and the finished sibling beside the parent is gone.
+  await pressed($, 'open-a1')
+  await inPane($, async ui => {
+    expect(await shows(ui, /Read the docs/)).toBe(true)
+    expect(await shows(ui, /Old helper/)).toBe(false)
+  })
+  await pressed($, 'open-b1')
+  await inPane($, async ui => {
+    expect(await shows(ui, /Open the file/)).toBe(true)
+  })
+
+  // When the engine no longer lists the running one, the stuck-card rule takes
+  // it, and the parents above it, which hold nothing going now, go with it.
+  listed = []
+  await $.prompt.submit({ text: 'and again', origin: { kind: 'composer' } })
+  await inPane($, async ui => {
+    expect((await ui.find({ type: 'Text' }))?.text).toContain('No subagents yet')
+  })
 })
 
 test('state saved by an older version still draws, in a narrow pane too', async ($, on) => {
