@@ -1,6 +1,6 @@
 {
   "name": "agent-monitor",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A live pane that tracks every subagent: model, estimated progress, estimated cost and what it is doing right now.",
   "author": { "name": "luckyajinnITsolutions" },
   "homepage": "https://github.com/luckyajinn/claude-agent-monitor",
