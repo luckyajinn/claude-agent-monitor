@@ -14,6 +14,7 @@ import {
   fill,
   finish,
   isKnownRate,
+  keptAtPrompt,
   newRow,
   patch,
   prettyModel,
@@ -174,21 +175,21 @@ export const register: Register = on => {
   })
 
   // The pane keeps the latest prompt's work only: when the person sends a new
-  // prompt, finished cards go (all but a parent of a card still going), and so
-  // does any "running" card the engine no longer lists as going (a missed end
-  // must not leave one stuck for good). A slash command, a background
-  // notification or another plugin's prompt is not a new prompt.
+  // prompt, every agent the engine lists as going stays, whatever its card
+  // says (as with "Clear finished"), and the rest go, a "running" card the
+  // engine no longer lists included (a missed end must not leave one stuck for
+  // good). The main agent's row goes unless something kept hangs beneath it;
+  // the new prompt's main turn starts a fresh one. A slash command, a
+  // background notification or another plugin's prompt is not a new prompt.
   on('prompt.submit', async ($, e, next) => {
     const isPerson = e.origin?.kind === 'composer' || e.origin?.kind === 'bridge'
 
     if (isPerson && e.command === undefined) {
       try {
-        const live = await goingIds($)
+        const isKept = keptAtPrompt(await goingIds($))
         // A finished parent with one of these beneath it stays, so a running
         // agent is never left without the card it is shown inside.
-        await update($, agents, list =>
-          survivors(list, row => row.status === 'running' && (live === undefined || live.has(row.id))),
-        )
+        await update($, agents, list => survivors(list, isKept))
         await update($, path, () => [])
       } catch {
         // A card left over is better than a prompt that fails.
