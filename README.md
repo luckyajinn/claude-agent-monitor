@@ -12,11 +12,11 @@ A one-line summary also appears above the prompt while any subagent is running (
 
 ## Screenshots
 
-Two running agents as expanded cards, each with its model, estimated progress, estimated cost, token counts and current task:
+The main agent at the root with its subagents as a tree: the stats row, the Running bar, the colour key, and each agent's model look, estimated progress and time left, estimated cost, token counts and current task:
 
-![Two running agents as expanded cards](docs/cards.png)
+![The main agent and its subagents as a tree](docs/tree.png)
 
-Click an agent's name to open it: the other cards step aside, a breadcrumb shows where you are, and the detail view shows its task, model, progress, tokens, cost and recent steps:
+Click an agent's name to open it: the other cards step aside, a breadcrumb shows where you are, the detail view shows its task, model, progress, tokens, cost and recent steps, and its own subagents hang beneath it:
 
 ![An opened agent's detail view](docs/detail-view.png)
 
