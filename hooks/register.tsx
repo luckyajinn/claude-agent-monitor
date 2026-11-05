@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentRow, AgentStatus } from '../types'
-import { barSvg, crabSvg } from './crab'
+import { barSvg, crabAlt, crabSvg, crabText } from './crab'
 import {
   addUsage,
   applyStep,
@@ -370,11 +370,11 @@ export const register: Register = on => {
           </Text>
           <Box gap={1} alignItems="center">
             {!hasSvg ? (
-              <Text color="red">{'\\o_o/'}</Text>
+              <Text color="red">{crabText(row.model)}</Text>
             ) : (
               <Svg
-                source={crabSvg(row.status)}
-                alt={`Crab, ${row.status}`}
+                source={crabSvg(row.status, row.model)}
+                alt={crabAlt(row.status, row.model)}
                 width={48}
                 height={32}
                 isInteractive={row.status === 'running'}
@@ -407,11 +407,11 @@ export const register: Register = on => {
         <Box key={`detail-${row.id}`} flexDirection="column" gap={1} borderStyle="round" borderColor={color} paddingX={1}>
           <Box gap={1} alignItems="center">
             {!hasSvg ? (
-              <Text color="red">{'\\o_o/'}</Text>
+              <Text color="red">{crabText(row.model)}</Text>
             ) : (
               <Svg
-                source={crabSvg(row.status)}
-                alt={`Crab, ${row.status}`}
+                source={crabSvg(row.status, row.model)}
+                alt={crabAlt(row.status, row.model)}
                 width={48}
                 height={32}
                 isInteractive={row.status === 'running'}

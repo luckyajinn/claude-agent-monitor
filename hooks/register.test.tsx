@@ -1,5 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
+import { crabAlt, crabSvg, crabText, lookOf } from './crab'
+
 import {
   applyStep,
   capRows,
@@ -11,6 +13,7 @@ import {
   ETA_MIN_MS,
   ETA_MIN_STEPS,
   etaOf,
+  familyOf,
   fill,
   finish,
   isKnownRate,
@@ -80,7 +83,7 @@ const END = {
 // ids in order, a step asks for a Grep, the clock stands still.
 const engine = (
   on: (event: string, hook: (...args: any[]) => unknown) => unknown,
-  more: { usage?: () => unknown; list?: () => unknown } = {},
+  more: { usage?: () => unknown; list?: () => unknown; model?: string } = {},
   ids = ['a1', 'b1'],
 ) => {
   let next = 0
@@ -91,7 +94,7 @@ const engine = (
   on('session.usage', more.usage ?? (() => ({ value: { startedAt: 0, context: {}, rateLimits: [] } })))
   on('agent.list', more.list ?? (() => ({ value: [] })))
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
-  on('agent.spawn', () => ({ model: MODEL, agentId: ids[next++] }))
+  on('agent.spawn', () => ({ model: more.model ?? MODEL, agentId: ids[next++] }))
   on('turn.step', async function* (_: unknown, e: { turnId: string; index: number }) {
     return {
       turnId: e.turnId,
@@ -1122,5 +1125,101 @@ test('the pane says so before any subagent starts', async ($, on) => {
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await ui.find({ type: 'Text' }))?.text).toContain('No subagents yet')
+  await ui.unmount()
+})
+
+const FAMILIES = [
+  ['claude-haiku-5-5', 'Haiku', '\\o.o/', '#2BB3A3'],
+  ['claude-sonnet-5-5', 'Sonnet', '\\(o_o)/', '#4A7FE0'],
+  ['claude-opus-5-5', 'Opus', '\\O_O/', '#9B5DE5'],
+  ['claude-fable-5-5', 'Fable', '\\o~o/', '#E8A33A'],
+] as const
+
+test('each model family has its own crab, and an unknown model keeps the default', () => {
+  expect(familyOf('claude-sonnet-5-5')).toBe('sonnet')
+  expect(familyOf('HAIKU')).toBe('haiku')
+  expect(familyOf('opus[1m]')).toBe('opus')
+  expect(familyOf('claude-fable-5-5-20261001')).toBe('fable')
+  expect(familyOf('')).toBeNull()
+  expect(familyOf('mystery-9')).toBeNull()
+
+  const sprites = new Set<string>()
+  const texts = new Set<string>()
+  for (const [model, name, text, body] of FAMILIES) {
+    expect(lookOf(model)?.name).toBe(name)
+    expect(crabText(model)).toBe(text)
+    expect(crabAlt('running', model)).toBe(`${name} crab, running`)
+    expect(crabSvg('running', model)).toContain(body)
+    expect(crabSvg('running', model)).not.toContain('#F35B46')
+    // Still animated while working, still once done, dimmed when it failed.
+    expect(crabSvg('running', model)).toContain('<animate')
+    expect(crabSvg('done', model)).not.toContain('<animate')
+    expect(crabSvg('failed', model)).toContain('opacity="0.4"')
+    sprites.add(crabSvg('running', model))
+    texts.add(crabText(model))
+  }
+  expect(sprites.size).toBe(4)
+  expect(texts.size).toBe(4)
+
+  // An empty or unknown model keeps today's coral crab and `\o_o/`.
+  for (const model of ['', 'mystery-9']) {
+    expect(lookOf(model)).toBeNull()
+    expect(crabSvg('running', model)).toContain('#F35B46')
+    expect(crabSvg('running', model)).toContain('viewBox="0 0 12 8"')
+    expect(crabText(model)).toBe('\\o_o/')
+    expect(crabAlt('done', model)).toBe('Crab, done')
+  }
+  expect(crabSvg('running')).toBe(crabSvg('running', ''))
+})
+
+const crabOf = async (ui: any) =>
+  ((await ui.findAll({ type: 'Svg' })) as any[]).find(svg => / crab, |^Crab, /.test(svg.props.alt))
+
+for (const [model, name, text, body] of FAMILIES) {
+  test(`a running ${name} agent draws the ${name} crab, as a sprite and as text`, async ($, on) => {
+    engine(on, { model })
+
+    await $.session.start(START)
+    await $.agent.spawn(SPAWN)
+    let ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    const crab = await crabOf(ui)
+    expect(crab?.props.alt).toBe(`${name} crab, running`)
+    expect(crab?.props.source).toContain(body)
+    await ui.unmount()
+
+    await $.session.start({ ...START, surface: 'terminal' })
+    ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text })).toBeDefined()
+    expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+    await ui.unmount()
+  })
+}
+
+test('the crab follows the model the agent is using now', async ($, on) => {
+  // Spawned as Opus; its next step reports a Sonnet model.
+  engine(on, { model: 'claude-opus-5-5' })
+
+  await $.session.start(START)
+  await $.agent.spawn(SPAWN)
+  let ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await crabOf(ui))?.props.alt).toBe('Opus crab, running')
+  await ui.unmount()
+
+  for await (const _chunk of $.turn.step({ ...STEP, agentId: 'a1' })) {
+    // Only the step's model matters here.
+  }
+  ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await crabOf(ui))?.props.alt).toBe('Sonnet crab, running')
+  await ui.unmount()
+})
+
+test('an unknown model keeps the default crab', async ($, on) => {
+  engine(on, { model: 'mystery-9' })
+
+  await $.session.start(START)
+  await $.agent.spawn(SPAWN)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await crabOf(ui))?.props.alt).toBe('Crab, running')
+  expect((await crabOf(ui))?.props.source).toContain('#F35B46')
   await ui.unmount()
 })
