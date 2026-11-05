@@ -30,6 +30,8 @@ import {
   trunc,
   usd,
   validTrail,
+  workInUse,
+  workOf,
 } from './track'
 
 const PANE = 'agent-monitor'
@@ -72,6 +74,18 @@ type SvgElement = (props: {
   height?: number
   isInteractive?: boolean
 }) => never
+
+// A card's accent (border, activity line, bar): the kind of work while it
+// runs, so similar work shares a colour; the outcome once it ends. The
+// terminal takes colour names, a picture-drawing surface the hex.
+const accentOf = (row: AgentRow, hasSvg: boolean): { color: string; fill: string } => {
+  if (row.status !== 'running') {
+    return { color: COLORS[row.status], fill: FILLS[row.status] }
+  }
+  const work = workOf(row.activity)
+
+  return { color: hasSvg ? work.fill : work.color, fill: work.fill }
+}
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
@@ -323,7 +337,7 @@ export const register: Register = on => {
     // Every agent is a card with the essentials; clicking its name opens it.
     const card = (row: AgentRow) => {
       const percent = progressOf(row)
-      const color = COLORS[row.status]
+      const { color, fill } = accentOf(row, hasSvg)
       const inside = insideOf(row)
       const title = (
         <Text weight="bold">
@@ -351,7 +365,7 @@ export const register: Register = on => {
               <Text color={color}>{bar(percent, 12)}</Text>
             ) : (
               <Svg
-                source={barSvg(percent, FILLS[row.status])}
+                source={barSvg(percent, fill)}
                 alt={`${row.status}, about ${percent} percent`}
                 width={110}
                 height={9}
@@ -397,7 +411,7 @@ export const register: Register = on => {
     // what it has been doing, line by line.
     const detailCard = (row: AgentRow) => {
       const percent = progressOf(row)
-      const color = COLORS[row.status]
+      const { color, fill } = accentOf(row, hasSvg)
       const modelNote = row.model === '' || isKnownRate(row.model) ? '' : ' (default rate)'
       const note = notes.get(row.id)
       // Rows kept from an earlier version have a total but no split.
@@ -432,7 +446,7 @@ export const register: Register = on => {
               <Text color={color}>{bar(percent, 12)}</Text>
             ) : (
               <Svg
-                source={barSvg(percent, FILLS[row.status])}
+                source={barSvg(percent, fill)}
                 alt={`${row.status}, about ${percent} percent`}
                 width={110}
                 height={9}
@@ -508,6 +522,8 @@ export const register: Register = on => {
     const hidden = finished.length - SHOWN_FINISHED
     const folded = (await read($, collapsed)) === true
     const elapsed = runningFor(all, now)
+    // The colour key: each kind of work a running card on screen is doing.
+    const inUse = workInUse([...(current === undefined ? [] : [current]), ...(folded ? [] : going)])
 
     // One stat: a small label over a value.
     const tile = (label: string, value: string) => (
@@ -575,6 +591,16 @@ export const register: Register = on => {
             })}
           </Box>
         )}
+        {inUse.length === 0 ? null : (
+          <Box gap={1} flexWrap="wrap">
+            <Text dimColor>Colour key:</Text>
+            {inUse.map(work => (
+              <Text key={`work-${work.kind}`} color={hasSvg ? work.fill : work.color}>
+                ● {work.label}
+              </Text>
+            ))}
+          </Box>
+        )}
         {current === undefined ? null : detailCard(current)}
         {current === undefined ? null : (
           <Text dimColor>{level.length === 0 ? 'Nothing inside yet.' : `Inside · ${level.length}`}</Text>
@@ -600,11 +626,15 @@ export const register: Register = on => {
     }
     const { Box, Text } = $.ui.resolve(e)
     const total = live.reduce((sum, row) => sum + row.costUsd, 0)
+    // The colour of the latest running agent's kind of work, as on its card.
+    const work = workOf(latest.activity)
 
     return (
       <Box flexDirection="column">
         <Box gap={1}>
-          <Text color="cyan">▸ {plural(live.length, 'agent')} running</Text>
+          <Text color={e.surface === 'terminal' ? work.color : work.fill}>
+            ▸ {plural(live.length, 'agent')} running
+          </Text>
           <Text dimColor>
             · {usd(total)} est. · {latest.name}: {latest.activity} ~{progressOf(latest)}%
           </Text>
