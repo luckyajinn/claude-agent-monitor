@@ -6,7 +6,7 @@
     {
       "name": "agent-monitor",
       "source": "./",
-      "description": "A live pane that tracks every Claude Code subagent: model, estimated progress, estimated cost and what it is doing right now."
+      "description": "A live pane that tracks the Claude Code main agent and every subagent as a tree: model, estimated progress and time left, estimated cost and what each is doing right now."
     }
   ]
 }

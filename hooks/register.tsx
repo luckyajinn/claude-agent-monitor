@@ -161,7 +161,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'agent-monitor',
-      description: 'Show the subagent monitor pane',
+      description: 'Show the agent monitor pane: the main agent and its subagents as a tree',
     })
 
     return next(e)
@@ -170,7 +170,7 @@ export const register: Register = on => {
   on('command.run', { command: 'agent-monitor' }, async $ => {
     await $.ui.open({ id: PANE, title: TITLE })
 
-    return { text: 'Subagent monitor opened.' }
+    return { text: 'Agent monitor opened.' }
   })
 
   // The pane keeps the latest prompt's work only: when the person sends a new

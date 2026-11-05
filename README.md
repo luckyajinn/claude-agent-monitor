@@ -67,7 +67,11 @@ When asked `Add marketplace?`, answer `y`, then pick a scope. The pane opens by 
 
 ## Privacy
 
-Nothing is written to disk and nothing is sent anywhere. An agent's task text and final report are kept in memory inside the mod only, so a reload of the mod forgets them. The rest (names, status, activity lines with file names and commands, token counts and costs) lives in the session's plugin state, which other plugins in the same session can read.
+Nothing is written to disk by the mod and nothing is sent anywhere: it makes no network calls.
+
+- **Kept in memory inside the mod only:** each agent's task text and final report. For the main agent, the task is the prompt you typed (its first 400 characters) and the report is the main agent's final answer (its first 500 characters). A reload of the mod forgets them, and other plugins cannot read them.
+- **Kept in the session's plugin state, which other plugins in the same session can read:** for the main agent and every subagent, its name, type, model, status, the activity line with the file name or command it is working on (the first 48 characters of a command, a search pattern or a URL), its last eight steps in the same form, its token counts and its estimated cost; plus which agent is open and whether the Running group is folded. Since 0.6.0 this includes the main agent's own activity, not just the subagents'. If you run a plugin you do not trust in the same session, assume it can see which files and commands your agents are working on.
+- **Gone when you move on:** finished cards clear at your next prompt (or when you press Clear finished), and the pane holds at most 30 agents.
 
 ## Cost rates
 
