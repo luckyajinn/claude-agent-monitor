@@ -21,7 +21,10 @@ import {
   progressOf,
   revive,
   rootsOf,
+  runningFor,
+  stopwatch,
   survivors,
+  tokenTotal,
   tokens,
   trailAfter,
   trunc,
@@ -36,6 +39,7 @@ const SHOWN_FINISHED = 8
 
 const agents = atom({ plugin: 'agent-monitor', key: 'agents' } as const, [])
 const path = atom({ plugin: 'agent-monitor', key: 'path' } as const, [])
+const collapsed = atom({ plugin: 'agent-monitor', key: 'collapsed' } as const, false)
 
 const COLORS: Record<AgentStatus, string> = {
   running: 'cyan',
@@ -502,9 +506,38 @@ export const register: Register = on => {
     const going = level.filter(row => row.status === 'running')
     const finished = level.filter(row => row.status !== 'running')
     const hidden = finished.length - SHOWN_FINISHED
+    const folded = (await read($, collapsed)) === true
+    const elapsed = runningFor(all, now)
+
+    // One stat: a small label over a value.
+    const tile = (label: string, value: string) => (
+      <Box key={`tile-${label}`} flexDirection="column" borderStyle="round" paddingX={1}>
+        <Text dimColor>{label}</Text>
+        <Text weight="bold" color="yellow" tabular>
+          {value}
+        </Text>
+      </Box>
+    )
 
     return (
       <Box flexDirection="column" gap={1}>
+        {running === 0 ? null : (
+          <Box gap={1} flexWrap="wrap">
+            {tile(session === undefined ? 'Agents cost (est.)' : 'Total chat cost', usd(session ?? total))}
+            {tile('Subagent tokens', tokens(tokenTotal(all)))}
+            {tile('Time', stopwatch(elapsed ?? 0))}
+          </Box>
+        )}
+        {going.length === 0 ? null : (
+          <Box backgroundColor="green" paddingX={1}>
+            <Button
+              key="running-toggle"
+              plain
+              label={`${folded ? '▸' : '▾'} Running · ${going.length}`}
+              onPress={() => update($, collapsed, value => !value)}
+            />
+          </Box>
+        )}
         <Box flexDirection="column">
           <Box gap={2}>
             <Text weight="bold">{plural(all.length, 'agent')}</Text>
@@ -546,7 +579,7 @@ export const register: Register = on => {
         {current === undefined ? null : (
           <Text dimColor>{level.length === 0 ? 'Nothing inside yet.' : `Inside · ${level.length}`}</Text>
         )}
-        {going.map(card)}
+        {folded ? null : going.map(card)}
         {finished.slice(0, SHOWN_FINISHED).map(card)}
         {hidden > 0 && <Text dimColor>+{hidden} earlier finished</Text>}
         <Text dimColor>Progress (~), time left and cost are estimates. Click an agent to open it.</Text>

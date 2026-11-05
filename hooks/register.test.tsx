@@ -19,7 +19,10 @@ import {
   progressOf,
   revive,
   rootsOf,
+  runningFor,
+  stopwatch,
   survivors,
+  tokenTotal,
   trailAfter,
   trunc,
   usd,
@@ -613,6 +616,63 @@ const keepState = (on: (event: string, hook: (...args: any[]) => unknown) => unk
 }
 
 const START = { cwd: '/', surface: 'desktop', isInteractive: true } as const
+
+test('the stats helpers read a stopwatch, add every token and time the agents going', () => {
+  expect(stopwatch(47_000)).toBe('0:47')
+  expect(stopwatch(725_000)).toBe('12:05')
+  expect(stopwatch(3_729_000)).toBe('1:02:09')
+  expect(stopwatch(-5)).toBe('0:00')
+
+  const a = { ...newRow('a', 'x', 'Explore', MODEL, 100), inputTokens: 1, cacheReadTokens: 2, cacheWriteTokens: 3, outputTokens: 4 }
+  const b = { ...newRow('b', 'y', 'Explore', MODEL, 400), outputTokens: 10 }
+  const c = { ...newRow('c', 'z', 'Explore', MODEL, 0), status: 'done' as const }
+  expect(tokenTotal([a, b, c])).toBe(20)
+  // The earliest running agent sets the time; a finished one does not count.
+  expect(runningFor([a, b, c], 1000)).toBe(900)
+  expect(runningFor([c], 1000)).toBeNull()
+  expect(runningFor([], 1000)).toBeNull()
+})
+
+test('while agents run, a stats row sits above them and a Running bar folds their cards', async ($, on) => {
+  engine(on, { usage: () => ({ value: { startedAt: 0, context: {}, rateLimits: [], cost: { usd: 2.38 } } }) }, ['a1', 'b1', 'c1'])
+  keepState(on)
+
+  await $.session.start(START)
+  await spawn($, 'Scout the repo')
+  await spawn($, 'Write the tests')
+  await spawn($, 'Lint the code')
+  await end($, 'c1')
+
+  await inPane($, async ui => {
+    expect(await shows(ui, /Total chat cost/)).toBe(true)
+    expect(await shows(ui, /\$2\.38/)).toBe(true)
+    expect(await shows(ui, /Subagent tokens/)).toBe(true)
+    expect(await shows(ui, /^Time$/)).toBe(true)
+    expect((await ui.find({ type: 'Button', key: 'running-toggle' }))?.props.label).toBe('▾ Running · 2')
+    expect(await shows(ui, /Scout the repo/)).toBe(true)
+  })
+
+  // Folding hides the running cards, not the finished ones.
+  await pressed($, 'running-toggle')
+  await inPane($, async ui => {
+    expect((await ui.find({ type: 'Button', key: 'running-toggle' }))?.props.label).toBe('▸ Running · 2')
+    expect(await shows(ui, /Scout the repo/)).toBe(false)
+    expect(await shows(ui, /Lint the code/)).toBe(true)
+  })
+
+  await pressed($, 'running-toggle')
+  await inPane($, async ui => {
+    expect(await shows(ui, /Scout the repo/)).toBe(true)
+  })
+
+  // Nothing running: no stats row and no bar.
+  await end($, 'a1')
+  await end($, 'b1')
+  await inPane($, async ui => {
+    expect(await shows(ui, /Total chat cost/)).toBe(false)
+    expect(await ui.find({ type: 'Button', key: 'running-toggle' })).toBeUndefined()
+  })
+})
 
 test('Clear finished empties a pane of finished agents', async ($, on) => {
   engine(on, {}, ['a1', 'b1', 'c1'])

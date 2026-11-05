@@ -43,6 +43,8 @@ declare module 'claude-code' {
       agents: AgentRow[]
       /** Ids from the top down: the agent whose children the pane shows. */
       path: string[]
+      /** True while the pane's "Running" group is folded away. */
+      collapsed: boolean
     }
   }
 }

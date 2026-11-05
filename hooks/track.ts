@@ -378,5 +378,27 @@ export const clock = (ms: number): string => {
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 }
 
+// A stopwatch reading, as the stats tiles show it: 0:47, 12:05, 1:02:09.
+export const stopwatch = (ms: number): string => {
+  const seconds = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = String(seconds % 60).padStart(2, '0')
+
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`
+}
+
+// Every token the agents have used: input, cache reads and writes, and output.
+export const tokenTotal = (rows: AgentRow[]): number =>
+  rows.reduce((sum, row) => sum + row.inputTokens + row.cacheReadTokens + row.cacheWriteTokens + row.outputTokens, 0)
+
+// How long the agents going now have been at it: since the earliest of them
+// began. Null when none is running.
+export const runningFor = (rows: AgentRow[], now: number): number | null => {
+  const started = rows.filter(row => row.status === 'running').map(row => row.startedAt)
+
+  return started.length === 0 ? null : now - Math.min(...started)
+}
+
 export const tokens = (n: number): string =>
   n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)
