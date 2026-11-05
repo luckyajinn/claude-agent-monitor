@@ -363,6 +363,16 @@ export const prettyModel = (id: string): string => {
   return m[2] === undefined ? family : `${family} ${m[2]}${m[3] === undefined ? '' : `.${m[3]}`}`
 }
 
+export type ModelFamily = 'haiku' | 'sonnet' | 'opus' | 'fable'
+
+// The family of a model id, matched as the cost table does: `claude-opus-5-5`,
+// `OPUS` and `opus[1m]` are all Opus. Null for an empty or unknown id.
+export const familyOf = (model: string): ModelFamily | null => {
+  const m = /haiku|sonnet|opus|fable/i.exec(model)
+
+  return m === null ? null : (m[0].toLowerCase() as ModelFamily)
+}
+
 export const bar = (percent: number, width = 20): string => {
   const filled = Math.round((percent / 100) * width)
 
