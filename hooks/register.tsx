@@ -554,15 +554,6 @@ export const register: Register = on => {
             />
           </Box>
         )}
-        <Box flexDirection="column">
-          <Box gap={2}>
-            <Text weight="bold">{plural(all.length, 'agent')}</Text>
-            <Text color="cyan">{running} running</Text>
-          </Box>
-          <Text dimColor>
-            {usd(total)} est.{session === undefined ? '' : ` · session ${usd(session)}`}
-          </Text>
-        </Box>
         <Box gap={1} flexWrap="wrap" alignItems="center">
           <Button
             key="clear"

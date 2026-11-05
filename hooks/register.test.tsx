@@ -417,7 +417,8 @@ test('a subagent appears, works and finishes in the pane', async ($, on) => {
   // Progress is an estimate, drawn with a "~".
   expect(await ui.find({ type: 'Text', text: /~14%/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /\$0\.01 est\./ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /session \$12\.34/ })).toBeDefined()
+  // The session cost the engine keeps is the Total Cost tile.
+  expect(await ui.find({ type: 'Text', text: /^\$12\.34$/ })).toBeDefined()
   expect(await ui.find({ type: 'Svg' })).toBeDefined()
   await ui.unmount()
 
@@ -828,8 +829,7 @@ test('Clear finished never removes a running agent; finished ones go', async ($,
     expect(await shows(ui, /Write the tests/)).toBe(false)
     expect(await shows(ui, /Lint the code/)).toBe(false)
     expect(await shows(ui, /Stop the build/)).toBe(false)
-    expect(await shows(ui, /1 agent/)).toBe(true)
-    expect(await shows(ui, /1 running/)).toBe(true)
+    expect((await ui.find({ type: 'Button', key: 'running-toggle' }))?.props.label).toBe('▾ Running · 1')
   })
 
   // Pressing it again changes nothing: it is still running.
@@ -1028,7 +1028,7 @@ test('the Clear button is dimmed, and says what stays, when nothing can be clear
   await inPane($, async ui => {
     expect(await shows(ui, /Scout the repo/)).toBe(true)
     expect(await shows(ui, /Write the tests/)).toBe(true)
-    expect(await shows(ui, /2 running/)).toBe(true)
+    expect((await ui.find({ type: 'Button', key: 'running-toggle' }))?.props.label).toBe('▾ Running · 2')
   })
 
   // One ends: the button wakes up with a count, and the note shrinks.
@@ -1139,12 +1139,12 @@ test('a new prompt keeps a finished parent of an agent still going, so the child
   expect(held('path')).toEqual([])
 
   // At the top: the finished parent is there with one agent inside, and the
-  // header counts match what is drawn (it used to say "1 running" over nothing).
+  // stats row still sees the running agent beneath it.
   await inPane($, async ui => {
     expect(await shows(ui, /Scout the repo/)).toBe(true)
     expect(await shows(ui, /▸ 1/)).toBe(true)
     expect(await shows(ui, /Unrelated job/)).toBe(false)
-    expect(await shows(ui, /1 running/)).toBe(true)
+    expect(await shows(ui, /^Total Cost/)).toBe(true)
   })
 
   // Walk down: every folder on the way to the running agent is still there,

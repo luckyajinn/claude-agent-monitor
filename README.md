@@ -61,7 +61,7 @@ When asked `Add marketplace?`, answer `y`, then pick a scope. The pane opens by 
 
 - **Progress is an estimate, drawn with a "~".** The engine has no percent-complete for an agent, and an agent's step limit is not in any event the mod receives. So the bar is a curve over steps taken: quick at first, flattening toward 95%, and 100% when the agent finishes.
 - **Time left is a rough guess, not a promise.** It takes the pace of the agent so far, reads it against the progress curve above, and counts down between steps, so it is only as good as that curve. It stays hidden until the agent has taken 3 steps and run 20 seconds. It is rounded (to the nearest 30 seconds up to five minutes, then the nearest minute) and drawn with a "~". Near the flat end of the curve it says "finishing" instead of a number, and when the time is up or no step has landed for two minutes it says "taking longer than expected". A parent's time left covers its own work only, not its sub-agents. It shows on each running card and in an opened agent's detail view.
-- **Cost is an estimate.** The engine reports token counts per agent but no dollars. They are multiplied by the rates below, which are assumptions. A model the table does not name uses the default rate and the card says "default rate". The pane also shows the session total the engine itself keeps.
+- **Cost is an estimate.** The engine reports token counts per agent but no dollars. They are multiplied by the rates below, which are assumptions. A model the table does not name uses the default rate and the card says "default rate". While agents run, the Total Cost tile shows the session total the engine itself keeps.
 - **Model, steps, tokens and activity are real.** They come straight from the engine's events.
 
 ## Privacy
