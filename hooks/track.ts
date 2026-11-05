@@ -250,17 +250,55 @@ export const revive = (row: AgentRow, now: number): AgentRow =>
         log: [],
       }
 
-// At most `max` rows: when over, the oldest finished ones go first, then the
-// oldest of any.
-export const capRows = (list: AgentRow[], max: number): AgentRow[] => {
-  let rows = list
+// At most `max` rows, oldest (earliest in the list) going first. The main
+// agent's row never goes, and only a leaf (a row with no child left) ever goes,
+// so no card is left without the parent it hangs from: a finished subtree goes
+// a leaf at a time, and a finished parent of a row still going stays, as
+// `survivors` would keep it. Finished leaves go first; only when none is left
+// does the oldest running leaf go, so the cap still holds. A parent loop has no
+// leaf: then the oldest row other than main goes. With `max` below 1 the main
+// row is all that stays.
+export const capRows = (
+  list: AgentRow[],
+  max: number,
+  isActive: (row: AgentRow) => boolean = row => row.status === 'running',
+): AgentRow[] => {
+  if (list.length <= max) {
+    return list
+  }
+  const gone = new Set<number>()
+  // How many rows not yet gone name each id as their parent.
+  const kids = new Map<string, number>()
 
-  while (rows.length > max) {
-    const at = rows.findIndex(row => row.status !== 'running')
-    rows = rows.filter((_, i) => i !== (at === -1 ? 0 : at))
+  for (const row of list) {
+    if (row.parentId != null) {
+      kids.set(row.parentId, (kids.get(row.parentId) ?? 0) + 1)
+    }
+  }
+  const evict = (may: (row: AgentRow) => boolean): boolean => {
+    const at = list.findIndex((row, i) => !gone.has(i) && row.id !== MAIN_ID && may(row))
+
+    if (at === -1) {
+      return false
+    }
+    const parentId = list[at]!.parentId
+    gone.add(at)
+    if (parentId != null) {
+      kids.set(parentId, kids.get(parentId)! - 1)
+    }
+
+    return true
+  }
+  const isLeaf = (row: AgentRow) => (kids.get(row.id) ?? 0) === 0
+
+  while (
+    list.length - gone.size > max &&
+    (evict(row => isLeaf(row) && !isActive(row)) || evict(isLeaf) || evict(() => true))
+  ) {
+    // Each pass evicts one row.
   }
 
-  return rows
+  return list.filter((_, i) => !gone.has(i))
 }
 
 // The main conversation's own loop has a row too, at the root of the tree:

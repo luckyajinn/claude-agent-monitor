@@ -447,6 +447,54 @@ test('the cap drops finished rows first, and the tree helpers walk parents', () 
   expect(validTrail(tree, ['gone', 'k'])).toEqual([])
 })
 
+test('the cap keeps the main row and every parent of a running row, and evicts finished leaves first', () => {
+  const r = (id: string, status: 'running' | 'done', parentId: string | null = MAIN_ID) => ({
+    ...newRow(id, id, 'x', MODEL, 0, parentId),
+    status,
+  })
+  const ids = (rows: { id: string }[]) => rows.map(row => row.id)
+  const main = { ...newMain(0), status: 'done' as const }
+  // No row is left whose parent went.
+  const whole = (rows: { id: string; parentId: string | null }[]) =>
+    rows.every(row => row.parentId === null || rows.some(one => one.id === row.parentId))
+
+  // The main row never goes, even finished and first in the list.
+  expect(ids(capRows([main, r('a', 'done'), r('b', 'done')], 1))).toEqual([MAIN_ID])
+  expect(ids(capRows([main, r('a', 'running'), r('b', 'running')], 2))).toEqual([MAIN_ID, 'b'])
+  expect(ids(capRows([main], 0))).toEqual([MAIN_ID])
+
+  // A finished parent of a running child stays; the oldest finished leaf goes.
+  const tree = [main, r('p', 'done'), r('k', 'running', 'p'), r('x', 'done'), r('y', 'done')]
+  expect(ids(capRows(tree, 4))).toEqual([MAIN_ID, 'p', 'k', 'y'])
+  expect(ids(capRows(tree, 3))).toEqual([MAIN_ID, 'p', 'k'])
+  // No finished leaf left: the running leaf goes, never its parent alone.
+  expect(ids(capRows(tree, 2))).toEqual([MAIN_ID, 'p'])
+  expect(whole(capRows(tree, 2))).toBe(true)
+
+  // A finished subtree goes a leaf at a time, children before their parent.
+  const nest = [main, r('f', 'done'), r('fc', 'done', 'f'), r('g', 'done'), r('run', 'running')]
+  expect(ids(capRows(nest, 4))).toEqual([MAIN_ID, 'f', 'g', 'run'])
+  expect(ids(capRows(nest, 3))).toEqual([MAIN_ID, 'g', 'run'])
+  expect(whole(capRows(nest, 3))).toBe(true)
+
+  // Everything running: the cap still holds, the oldest running leaf going
+  // first and never a running row's parent.
+  const busy = [main, r('a', 'running'), r('a1', 'running', 'a'), r('b', 'running'), r('c', 'running')]
+  expect(ids(capRows(busy, 4))).toEqual([MAIN_ID, 'a', 'b', 'c'])
+  expect(ids(capRows(busy, 3))).toEqual([MAIN_ID, 'b', 'c'])
+  expect(ids(capRows(busy, 1))).toEqual([MAIN_ID])
+  for (const max of [1, 2, 3, 4]) {
+    expect(capRows(busy, max).length).toBe(max)
+    expect(whole(capRows(busy, max))).toBe(true)
+  }
+
+  // A parent loop has no leaf: the cap still holds, and main still stays.
+  expect(ids(capRows([main, r('l1', 'running', 'l2'), r('l2', 'running', 'l1')], 2))).toEqual([MAIN_ID, 'l2'])
+
+  // Under the cap the list comes back as it was.
+  expect(capRows(busy, 30)).toBe(busy)
+})
+
 test('a clear keeps the active rows and every ancestor of one, and trims the trail only when needed', () => {
   const r = (id: string, status: 'running' | 'done', parentId: string | null = null) => ({
     ...newRow(id, id, 'x', MODEL, 0, parentId),
