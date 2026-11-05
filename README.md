@@ -1,6 +1,6 @@
 # claude-agent-monitor
 
-A Claude Code mod that keeps a live pane of every subagent your session starts. Each running agent gets a card showing:
+A Claude Code mod that keeps a live pane of the main agent and every subagent your session starts, drawn as a tree. Each agent gets a card showing:
 
 - **Model:** a plain name such as "Sonnet 5.5".
 - **Task:** what it is doing right now (Researching, Writing, Verifying, Delegating, Done), with the file or command in progress.
@@ -8,7 +8,7 @@ A Claude Code mod that keeps a live pane of every subagent your session starts. 
 - **Cost:** estimated dollars and token counts.
 - **A crab:** an 8-bit sprite that works while the agent works and raises its arms when it is done.
 
-A one-line summary also appears above the prompt while any agent is running. Anything another plugin draws there (a usage bar, for example) stays beneath it.
+A one-line summary also appears above the prompt while any subagent is running (the main agent alone does not raise it). Anything another plugin draws there (a usage bar, for example) stays beneath it.
 
 ## Screenshots
 
@@ -28,10 +28,11 @@ The mod's one-line summary sits above whatever another plugin draws above the pr
 
 ## Using the pane
 
-- **A stats row and a Running bar sit above the cards while any agent is running.** Three tiles show Total Cost (the session figure the engine keeps; when it can't be read the tile says "Total Cost (est.)" and shows the mod's own estimate), Total Tokens (input, cache and output, for the subagents in the pane only) and Total time (since the earliest running agent began, as `m:ss`). A green `▾ Running · N` bar sits above the running cards; click it to fold those cards away (`▸`) and again to show them. Finished cards stay visible either way. Both disappear when nothing is running.
-- **A running card is coloured by the kind of work it is doing**, so agents doing similar work share a colour: research (cyan), web research (blue), writing (magenta), verifying (lime), commands (orange), delegating (violet) and other work (gray). The colour marks the card's border, its activity line, its progress bar and the line above the prompt, and a colour key lists the kinds on screen now. A finished card keeps its outcome colour (done green, failed red, stopped yellow). The activity stays written on every card, so nothing depends on colour alone.
-- **Every agent is an expanded card**, running or finished, so you see them all at a glance. Past eight finished agents the rest collapse into "+N earlier finished".
-- **Click an agent to open it like a folder.** The other cards step aside, the agent's own subagents take their place, and a breadcrumb at the top (`Agents › Scout the repo`) takes you back up. A `▸ 2` beside a name says it has two agents inside.
+- **A stats row and a Running bar sit above the cards while any agent is running.** Three tiles show Total Cost (the session figure the engine keeps; when it can't be read the tile says "Total Cost (est.)" and shows the mod's own estimate), Total Tokens (input, cache and output, for the main agent and every subagent in the pane) and Total time (since the earliest running agent began, as `m:ss`). A green `▾ Running · N` bar (N is the running subagents) sits above the tree; click it to fold the subagents away under the main agent (`▸`) and again to show them. Both disappear when nothing is running.
+- **A running card is coloured by the kind of work it is doing**, so agents doing similar work share a colour: research (cyan), web research (blue), writing (magenta), verifying (lime), commands (orange), delegating (violet) and other work (gray). The colour marks the card's status icon, its activity line, its progress bar and the line above the prompt, and a colour key lists the kinds on screen now. A finished card keeps its outcome colour (done green, failed red, stopped yellow). The activity stays written on every card, so nothing depends on colour alone.
+- **The main agent is tracked too, at the root of a tree.** "Main Claude Agent" gets its own card (model, steps, tokens, cost, what it is doing) for the current prompt, and every subagent hangs beneath it with tree connectors (`├──`, `└──`, `│`); a subagent's own subagents hang one step further in. Siblings are listed in the order they started.
+- **Every agent is an expanded card**, running or finished, so you see them all at a glance. In each group of siblings, past eight finished agents the earliest collapse into "+N earlier finished" (a finished one with an agent still going beneath it always stays).
+- **Click an agent to open it like a folder.** The other cards step aside, its detail view takes the top and its own subagents hang beneath it as a tree, and a breadcrumb at the top (`Agents › Scout the repo`) takes you back up. A `▸ 2` beside a name says it has two agents inside.
 - **An opened agent shows its detail:** the task it was given, its model (name and id), agent type, effort and whether it runs in the background; its status, steps, time, message count and last stop reason; its tokens (input, cache read, cache write, output, and the size of its context now); its estimated cost split into input, cache and output; its last eight steps, one line each; and its final report once it finishes.
 - **Clear finished** removes the cards of agents that are done, stopped or failed, and never one that is still going (pending, running or waiting). A finished parent that still has an agent going inside it stays too, so an opened folder and its breadcrumb never lose a card; the breadcrumb is cut back only if a card it names was cleared. The button shows how many it will clear, for example `Clear finished (3)`. When nothing can be cleared it is dimmed, and a note beside it says what stays, such as "2 still running stay".
 - **The pane shows the latest prompt's work only.** When you send a new prompt, finished cards clear, except a finished parent that still has an agent going inside it. A running card the engine no longer lists as going clears too, so a missed end cannot leave one stuck (the Clear finished button leaves such a card alone, because it still says running; your next prompt removes it). A slash command or a background notification does not clear anything.

@@ -17,7 +17,11 @@ import {
   fill,
   finish,
   isKnownRate,
+  MAIN_ID,
+  newMain,
   newRow,
+  rooted,
+  treeOf,
   prettyModel,
   progressOf,
   revive,
@@ -344,6 +348,86 @@ test('the card and the detail show the ETA of a running agent', async ($, on) =>
   await ui.unmount()
 })
 
+test('the tree hangs every agent under the main one, with connectors and folded finished rows', () => {
+  const r = (id: string, status: 'running' | 'done', parentId: string | null) => ({
+    ...newRow(id, id, 'Explore', MODEL, 0, parentId),
+    status,
+  })
+  // Rows with no parent (spawned before the main row existed) go under it.
+  const list = rooted([newMain(0), r('p', 'running', null), r('k', 'running', 'p'), r('q', 'done', MAIN_ID)])
+  expect(list.find(row => row.id === 'p')?.parentId).toBe(MAIN_ID)
+  expect(list.find(row => row.id === MAIN_ID)?.parentId).toBeNull()
+
+  const lines = treeOf(list, MAIN_ID, 8).map(item =>
+    item.kind === 'row' ? `${item.lead}${item.row.id}|${item.body}` : `${item.lead}+${item.hidden}`,
+  )
+  expect(lines).toEqual(['├── p|│   │   ', '│   └── k|│           ', '└── q|        '])
+
+  // Past `keep`, the earliest finished fold away; a finished one with a
+  // running agent beneath it never does.
+  const many = rooted([
+    newMain(0),
+    r('f1', 'done', null),
+    r('f2', 'done', null),
+    r('f3', 'done', null),
+    r('kid', 'running', 'f1'),
+  ])
+  const shown = treeOf(many, MAIN_ID, 1).map(item => (item.kind === 'row' ? item.row.id : `+${item.hidden}`))
+  expect(shown).toEqual(['f1', 'kid', 'f3', '+1'])
+  // A parent loop does not hang the walk.
+  expect(treeOf([r('x', 'done', 'y'), r('y', 'done', 'x')], 'x', 8).length).toBe(1)
+})
+
+test('the main agent is tracked as the root of the tree, and the band leaves it out', async ($, on) => {
+  engine(on)
+  on('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
+  // Stands for what draws beneath the band: nothing else here.
+  on('ui.render', ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+
+    return <Text>below</Text>
+  })
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  // The main loop's turn: no agent id.
+  await $.turn.start({ text: 'look into the repo', turnId: 'main-1' })
+  for await (const _chunk of $.turn.step({ ...STEP, turnId: 'main-1' })) {
+    // Only the result matters.
+  }
+
+  const BAND = { plugin: 'agent-monitor', component: 'AbovePrompt', requestId: 'band', props: { hasSurvey: false } } as const
+  let band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await band.find({ type: 'Text', text: /agent running/ })).toBeUndefined()
+  await band.unmount()
+
+  await $.agent.spawn(SPAWN)
+  await $.agent.spawn(CHILD)
+
+  await inPane(
+    $,
+    async ui => {
+      expect(await shows(ui, /Main Claude Agent/)).toBe(true)
+      expect(await shows(ui, /Sonnet 5\.5 · 0s · 1 step/)).toBe(true)
+      // Scout hangs under the main agent, and its own child under it.
+      expect(await shows(ui, /^└── $/)).toBe(true)
+      expect(await shows(ui, /^ {4}└── $/)).toBe(true)
+      // The main agent's body lines carry the │ down to its first child.
+      expect(await shows(ui, /^│ {3}$/)).toBe(true)
+    },
+    'terminal',
+  )
+
+  band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await band.find({ type: 'Text', text: /2 agents running/ })).toBeDefined()
+  await band.unmount()
+
+  // The main turn ends: its row is done, and keeps its task and report.
+  await $.turn.complete({ ...END, turnId: 'main-1', usage: USAGE })
+  await inPane($, async ui => {
+    expect((await ui.findAll({ type: 'Text', text: /^✔/ })).length).toBeGreaterThan(0)
+  })
+})
+
 test('the cap drops finished rows first, and the tree helpers walk parents', () => {
   const r = (id: string, status: 'running' | 'done', parentId: string | null = null) => ({
     ...newRow(id, id, 'x', MODEL, 0, parentId),
@@ -631,11 +715,13 @@ test('clicking an agent opens it like a folder, with a breadcrumb back', async (
     await ui.unmount()
   }
 
-  // At the top: the parent, with a count of what is inside; the child waits.
+  // At the top: the whole tree under the main agent, the parent with a count
+  // of what is inside and the child hanging beneath it.
   await look(async ui => {
+    expect(await ui.find({ type: 'Text', text: /Main Claude Agent/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Scout the repo/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /▸ 1/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Read the docs/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /Read the docs/ })).toBeDefined()
   })
 
   // Open it: the child takes its place and a breadcrumb shows where we are.
@@ -655,7 +741,7 @@ test('clicking an agent opens it like a folder, with a breadcrumb back', async (
   await ui.unmount()
 
   await look(async view => {
-    expect(await view.find({ type: 'Text', text: /Read the docs/ })).toBeUndefined()
+    expect(await view.find({ type: 'Text', text: /Main Claude Agent/ })).toBeDefined()
     expect(await view.find({ type: 'Button', key: 'crumb-root' })).toBeUndefined()
   })
 })
@@ -767,12 +853,13 @@ test('while agents run, a stats row sits above them and a Running bar folds thei
     expect(await shows(ui, /Scout the repo/)).toBe(true)
   })
 
-  // Folding hides the running cards, not the finished ones.
+  // Folding hides the subagent tree under the main agent, finished ones too.
   await pressed($, 'running-toggle')
   await inPane($, async ui => {
     expect((await ui.find({ type: 'Button', key: 'running-toggle' }))?.props.label).toBe('▸ Running · 2')
     expect(await shows(ui, /Scout the repo/)).toBe(false)
-    expect(await shows(ui, /Lint the code/)).toBe(true)
+    expect(await shows(ui, /Lint the code/)).toBe(false)
+    expect(await shows(ui, /Main Claude Agent/)).toBe(true)
   })
 
   await pressed($, 'running-toggle')

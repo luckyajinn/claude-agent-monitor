@@ -15,12 +15,15 @@ import {
   finish,
   isKnownRate,
   newRow,
-  ordered,
   patch,
   prettyModel,
   progressOf,
   revive,
-  rootsOf,
+  MAIN_ID,
+  MAIN_NAME,
+  newMain,
+  rooted,
+  treeOf,
   runningFor,
   stopwatch,
   survivors,
@@ -127,13 +130,21 @@ const ensure = async ($: EngineInterface, id: string, model: string, now: number
   if ((await read($, agents)).some(row => row.id === id)) {
     return
   }
+  // The main agent is not in the engine's list of agents: it is the session.
+  if (id === MAIN_ID) {
+    const main = { ...newMain(now), model }
+
+    await update($, agents, list => (list.some(one => one.id === id) ? list : capRows([main, ...list], MAX_ROWS)))
+
+    return
+  }
   let info: { description?: string; type?: string; parentId?: string } = {}
   try {
     info = (await $.agent.list()).find(one => one.id === id) ?? {}
   } catch {
     // The list is a courtesy: a bare card is better than none.
   }
-  const row = newRow(id, info.description || 'Subagent', info.type ?? 'agent', model, now, info.parentId ?? null)
+  const row = newRow(id, info.description || 'Subagent', info.type ?? 'agent', model, now, info.parentId ?? MAIN_ID)
 
   await update($, agents, list =>
     list.some(one => one.id === id) ? list : capRows([...list, row], MAX_ROWS),
@@ -198,7 +209,8 @@ export const register: Register = on => {
     try {
       const id = started.agentId
       const now = await $.clock.now()
-      const parentId = e.parentAgentId ?? null
+      // One the main conversation spawned hangs under the main agent's row.
+      const parentId = e.parentAgentId ?? MAIN_ID
       const given = { isBackground: e.background, isFork: e.fork }
       const row = newRow(id, e.description, e.subagentType, started.model, now, parentId, given)
       notes.set(id, { prompt: trunc(e.prompt, 400), report: '' })
@@ -224,29 +236,32 @@ export const register: Register = on => {
     return started
   }).catch(($, e, next) => next(e))
 
-  // A run of an agent's loop begins: a resumed agent is running again.
+  // A run of an agent's loop begins: a resumed agent is running again. With no
+  // agent id it is the main conversation's own loop: the main agent's row.
   on('turn.start', async ($, e, next) => {
-    const id = e.agentId
+    const id = e.agentId ?? MAIN_ID
 
-    if (id !== undefined) {
-      try {
-        const now = await $.clock.now()
-        await ensure($, id, '', now)
-        await update($, agents, list => patch(list, id, row => revive(row, now)))
-      } catch {
-        // Tracking never breaks a turn.
+    try {
+      const now = await $.clock.now()
+      if (id === MAIN_ID && e.text !== '') {
+        notes.set(id, { prompt: trunc(e.text, 400), report: '' })
       }
+      await ensure($, id, '', now)
+      await update($, agents, list => patch(list, id, row => revive(row, now)))
+    } catch {
+      // Tracking never breaks a turn.
     }
 
     return next(e)
   })
 
-  // One model request of a subagent: tokens, cost, model and what it asked for.
+  // One model request of an agent (the main one included): tokens, cost,
+  // model and what it asked for.
   on('turn.step', async function* ($, e, next) {
-    const id = e.agentId
+    const id = e.agentId ?? MAIN_ID
     const result = yield* next(e)
 
-    if (id !== undefined) {
+    {
       try {
         const now = await $.clock.now()
         await ensure($, id, e.model, now)
@@ -269,9 +284,9 @@ export const register: Register = on => {
   })
 
   on('turn.complete', async ($, e, next) => {
-    const id = e.agentId
+    const id = e.agentId ?? MAIN_ID
 
-    if (id !== undefined) {
+    {
       try {
         const status: AgentStatus =
           e.reason === 'answer' ? 'done' : e.reason === 'aborted' ? 'stopped' : 'failed'
@@ -300,7 +315,8 @@ export const register: Register = on => {
     const { Svg } = $.ui.resolve(e) as unknown as { Svg: SvgElement }
     const hasSvg = e.surface !== 'terminal'
     // Rows kept from an earlier version lack the newer fields: fill them in.
-    const all: AgentRow[] = (await read($, agents)).map(fill)
+    // A row with no parent hangs under the main agent.
+    const all: AgentRow[] = rooted((await read($, agents)).map(fill))
     const now = await $.clock.now()
 
     if (all.length === 0) {
@@ -334,68 +350,106 @@ export const register: Register = on => {
     const insideOf = (row: AgentRow) => childrenOf(all, row.id).length
     const spent = (row: AgentRow) => clock((row.endedAt ?? now) - row.startedAt)
 
+    // The tree's connectors, in the monospaced face so the │ lines up. Spaces
+    // are no-break spaces, so no surface folds the indent away.
+    const wire = (prefix: string, key: string) =>
+      prefix === '' ? null : (
+        <Text key={key} mono dimColor>
+          {prefix.replace(/ /g, ' ')}
+        </Text>
+      )
+
     // Every agent is a card with the essentials; clicking its name opens it.
-    const card = (row: AgentRow) => {
+    // In the tree each line of it starts with its connector: `lead` on the
+    // title line, `body` on the rest and on the blank line after it.
+    const card = (row: AgentRow, lead = '', body = '') => {
       const percent = progressOf(row)
       const { color, fill } = accentOf(row, hasSvg)
       const inside = insideOf(row)
       const title = (
         <Text weight="bold">
-          {ICONS[row.status]} {trunc(row.name, nameMax)}
+          <Text color={color}>{ICONS[row.status]}</Text> {trunc(row.name, nameMax)}
         </Text>
       )
       const activity = <Text color={color}>{row.activity}</Text>
+      const line = (key: string, prefix: string, content: unknown) => (
+        <Box key={`${key}-${row.id}`} alignItems="center">
+          {wire(prefix, `wire-${key}-${row.id}`)}
+          {content as never}
+        </Box>
+      )
 
       return (
-        <Box key={`card-${row.id}`} flexDirection="column" borderStyle="round" borderColor={color} paddingX={1}>
-          <Box justifyContent="space-between" gap={1}>
-            <Button key={`open-${row.id}`} plain onPress={() => openTo(row)}>
-              {title}
-              <Text dimColor>{inside > 0 ? ` ▸ ${inside}` : ' ›'}</Text>
-            </Button>
-            {isNarrow ? null : activity}
-          </Box>
-          {isNarrow ? activity : null}
-          <Text dimColor>
-            {prettyModel(row.model) || 'model unknown'} · {spent(row)} · {plural(row.steps, 'step')}
-            {etaOf(row, now) === null ? '' : ` · ${etaOf(row, now)}`}
-          </Text>
-          <Box gap={1} alignItems="center">
-            {!hasSvg ? (
-              <Text color={color}>{bar(percent, 12)}</Text>
-            ) : (
-              <Svg
-                source={barSvg(percent, fill)}
-                alt={`${row.status}, about ${percent} percent`}
-                width={110}
-                height={9}
-              />
-            )}
-            <Text color={color} weight="bold" tabular>
-              {row.status === 'done' ? '' : '~'}
-              {percent}%
-            </Text>
-          </Box>
-          <Text>
-            {usd(row.costUsd)} est.
-            {row.model === '' || isKnownRate(row.model) ? '' : ' · default rate'} ·{' '}
-            {tokens(row.inputTokens + row.cacheReadTokens + row.cacheWriteTokens)} in ·{' '}
-            {tokens(row.outputTokens)} out
-          </Text>
-          <Box gap={1} alignItems="center">
-            {!hasSvg ? (
-              <Text color="red">{crabText(row.model)}</Text>
-            ) : (
-              <Svg
-                source={crabSvg(row.status, row.model)}
-                alt={crabAlt(row.status, row.model)}
-                width={48}
-                height={32}
-                isInteractive={row.status === 'running'}
-              />
-            )}
-            <Text dimColor>{trunc(row.detail, isNarrow ? 22 : 40)}</Text>
-          </Box>
+        <Box key={`card-${row.id}`} flexDirection="column">
+          {line(
+            'title',
+            lead,
+            <Box flexGrow={1} justifyContent="space-between" gap={1}>
+              <Button key={`open-${row.id}`} plain onPress={() => openTo(row)}>
+                {title}
+                <Text dimColor>{inside > 0 ? ` ▸ ${inside}` : ' ›'}</Text>
+              </Button>
+              {isNarrow ? null : activity}
+            </Box>,
+          )}
+          {isNarrow ? line('activity', body, activity) : null}
+          {line(
+            'model',
+            body,
+            <Text dimColor>
+              {prettyModel(row.model) || 'model unknown'} · {spent(row)} · {plural(row.steps, 'step')}
+              {etaOf(row, now) === null ? '' : ` · ${etaOf(row, now)}`}
+            </Text>,
+          )}
+          {line(
+            'bar',
+            body,
+            <Box gap={1} alignItems="center">
+              {!hasSvg ? (
+                <Text color={color}>{bar(percent, 12)}</Text>
+              ) : (
+                <Svg
+                  source={barSvg(percent, fill)}
+                  alt={`${row.status}, about ${percent} percent`}
+                  width={110}
+                  height={9}
+                />
+              )}
+              <Text color={color} weight="bold" tabular>
+                {row.status === 'done' ? '' : '~'}
+                {percent}%
+              </Text>
+            </Box>,
+          )}
+          {line(
+            'cost',
+            body,
+            <Text>
+              {usd(row.costUsd)} est.
+              {row.model === '' || isKnownRate(row.model) ? '' : ' · default rate'} ·{' '}
+              {tokens(row.inputTokens + row.cacheReadTokens + row.cacheWriteTokens)} in ·{' '}
+              {tokens(row.outputTokens)} out
+            </Text>,
+          )}
+          {line(
+            'crab',
+            body,
+            <Box gap={1} alignItems="center">
+              {!hasSvg ? (
+                <Text color="red">{crabText(row.model)}</Text>
+              ) : (
+                <Svg
+                  source={crabSvg(row.status, row.model)}
+                  alt={crabAlt(row.status, row.model)}
+                  width={48}
+                  height={32}
+                  isInteractive={row.status === 'running'}
+                />
+              )}
+              <Text dimColor>{trunc(row.detail, isNarrow ? 22 : 40)}</Text>
+            </Box>,
+          )}
+          {body.trim() === '' ? <Text> </Text> : line('gap', body, null)}
         </Box>
       )
     }
@@ -516,14 +570,19 @@ export const register: Register = on => {
       )
     }
 
-    const level = ordered(current === undefined ? rootsOf(all) : childrenOf(all, current.id))
-    const going = level.filter(row => row.status === 'running')
-    const finished = level.filter(row => row.status !== 'running')
-    const hidden = finished.length - SHOWN_FINISHED
+    // The tree's root: the agent opened, else the main agent (only a name when
+    // its loop has not been seen, as after a reload in the middle of a turn).
+    const main = all.find(row => row.id === MAIN_ID)
+    const rootId = current?.id ?? MAIN_ID
+    const items = treeOf(all, rootId, SHOWN_FINISHED)
+    const below = items.flatMap(item => (item.kind === 'row' ? [item.row] : []))
+    const going = below.filter(row => row.status === 'running')
     const folded = (await read($, collapsed)) === true
     const elapsed = runningFor(all, now)
     // The colour key: each kind of work a running card on screen is doing.
-    const inUse = workInUse([...(current === undefined ? [] : [current]), ...(folded ? [] : going)])
+    const root = current ?? main
+    const inUse = workInUse([...(root === undefined ? [] : [root]), ...(folded ? [] : going)])
+    const rootBody = items.length > 0 && !folded ? '│   ' : ''
 
     // One stat: a small label over a value.
     const tile = (label: string, value: string) => (
@@ -594,11 +653,30 @@ export const register: Register = on => {
         )}
         {current === undefined ? null : detailCard(current)}
         {current === undefined ? null : (
-          <Text dimColor>{level.length === 0 ? 'Nothing inside yet.' : `Inside · ${level.length}`}</Text>
+          <Text dimColor>{below.length === 0 ? 'Nothing inside yet.' : `Inside · ${childrenOf(all, current.id).length}`}</Text>
         )}
-        {folded ? null : going.map(card)}
-        {finished.slice(0, SHOWN_FINISHED).map(card)}
-        {hidden > 0 && <Text dimColor>+{hidden} earlier finished</Text>}
+        <Box flexDirection="column">
+          {current !== undefined ? null : main === undefined ? (
+            <Box key="main-name" flexDirection="column">
+              <Text weight="bold">{MAIN_NAME}</Text>
+              {rootBody === '' ? null : wire(rootBody, 'wire-main-gap')}
+            </Box>
+          ) : (
+            card(main, '', rootBody)
+          )}
+          {folded
+            ? null
+            : items.map(item =>
+                item.kind === 'row' ? (
+                  card(item.row, item.lead, item.body)
+                ) : (
+                  <Box key={`more-${item.lead.length}-${item.hidden}`}>
+                    {wire(item.lead, `wire-more-${item.lead.length}`)}
+                    <Text dimColor>+{item.hidden} earlier finished</Text>
+                  </Box>
+                ),
+              )}
+        </Box>
         <Text dimColor>Progress (~), time left and cost are estimates. Click an agent to open it.</Text>
       </Box>
     )
@@ -609,7 +687,8 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const below = await next(e)
     const list: AgentRow[] = await read($, agents)
-    const live = list.filter(row => row.status === 'running')
+    // Subagents only: the main agent is at work whenever a prompt is.
+    const live = list.filter(row => row.status === 'running' && row.id !== MAIN_ID)
     const latest = live[live.length - 1]
 
     if (e.props.hasSurvey || latest === undefined) {

@@ -263,6 +263,66 @@ export const capRows = (list: AgentRow[], max: number): AgentRow[] => {
   return rows
 }
 
+// The main conversation's own loop has a row too, at the root of the tree:
+// every agent it spawns hangs beneath it.
+export const MAIN_ID = 'main'
+export const MAIN_NAME = 'Main Claude Agent'
+
+export const newMain = (now: number): AgentRow => newRow(MAIN_ID, MAIN_NAME, 'main', '', now, null)
+
+// Rows the main agent spawned before it had a row of its own (or saved by an
+// earlier version) have no parent: hang them under the main row.
+export const rooted = (list: AgentRow[]): AgentRow[] =>
+  list.map(row => (row.id !== MAIN_ID && (row.parentId ?? null) === null ? { ...row, parentId: MAIN_ID } : row))
+
+// True when `id` has a running agent anywhere beneath it.
+const runsBelow = (list: AgentRow[], id: string, seen = new Set<string>()): boolean =>
+  !seen.has(id) &&
+  (seen.add(id), childrenOf(list, id).some(row => row.status === 'running' || runsBelow(list, row.id, seen)))
+
+// One line of the tree beneath a root: a row with the connector its title
+// line draws (`lead`, ending in ├── or └──), the one its other lines draw
+// (`body`, carrying the │ down to its own children when it has any) and the
+// one its children start from (`rest`); or a count of earlier finished rows
+// folded away in a sibling group.
+export type TreeItem =
+  | { kind: 'row'; row: AgentRow; lead: string; body: string; hasKids: boolean }
+  | { kind: 'more'; hidden: number; lead: string }
+
+// The descendants of `rootId`, depth first in the order they started. In each
+// sibling group, every running row stays, and so does each finished one with
+// something running beneath it; past `keep` finished, the earliest fold into
+// one "+N earlier finished" line.
+export const treeOf = (list: AgentRow[], rootId: string, keep: number): TreeItem[] => {
+  const out: TreeItem[] = []
+  const seen = new Set<string>([rootId])
+
+  const walk = (parentId: string, prefix: string) => {
+    const kids = childrenOf(list, parentId).filter(row => !seen.has(row.id))
+    const foldable = kids.filter(row => row.status !== 'running' && !runsBelow(list, row.id))
+    const folded = new Set(foldable.slice(0, Math.max(0, foldable.length - keep)).map(row => row.id))
+    const shown = kids.filter(row => !folded.has(row.id))
+    const count = shown.length + (folded.size > 0 ? 1 : 0)
+
+    shown.forEach((row, i) => {
+      seen.add(row.id)
+      const last = i === count - 1
+      const rest = prefix + (last ? '    ' : '│   ')
+      const hasKids = childrenOf(list, row.id).length > 0
+
+      out.push({ kind: 'row', row, lead: prefix + (last ? '└── ' : '├── '), body: rest + (hasKids ? '│   ' : '    '), hasKids })
+      walk(row.id, rest)
+    })
+    if (folded.size > 0) {
+      out.push({ kind: 'more', hidden: folded.size, lead: `${prefix}└── ` })
+    }
+  }
+
+  walk(rootId, '')
+
+  return out
+}
+
 export const rootsOf = (list: AgentRow[]): AgentRow[] =>
   list.filter(row => (row.parentId ?? null) === null)
 
@@ -277,8 +337,11 @@ export const validTrail = (list: AgentRow[], trail: readonly string[]): string[]
   for (const id of trail) {
     const row = list.find(one => one.id === id)
     const parent = kept[kept.length - 1] ?? null
+    const from = row?.parentId ?? null
+    // The first step starts at the top: the main agent, or one beneath it.
+    const fits = parent === null ? from === null || from === 'main' : from === parent
 
-    if (row === undefined || (row.parentId ?? null) !== parent) {
+    if (row === undefined || !fits) {
       break
     }
     kept.push(id)
