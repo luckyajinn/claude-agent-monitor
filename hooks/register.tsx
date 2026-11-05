@@ -523,9 +523,9 @@ export const register: Register = on => {
       <Box flexDirection="column" gap={1}>
         {running === 0 ? null : (
           <Box gap={1} flexWrap="wrap">
-            {tile(session === undefined ? 'Agents cost (est.)' : 'Total chat cost', usd(session ?? total))}
-            {tile('Subagent tokens', tokens(tokenTotal(all)))}
-            {tile('Time', stopwatch(elapsed ?? 0))}
+            {tile(session === undefined ? 'Total Cost (est.)' : 'Total Cost', usd(session ?? total))}
+            {tile('Total Tokens', tokens(tokenTotal(all)))}
+            {tile('Total time', stopwatch(elapsed ?? 0))}
           </Box>
         )}
         {going.length === 0 ? null : (

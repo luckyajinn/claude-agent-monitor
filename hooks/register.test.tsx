@@ -644,10 +644,10 @@ test('while agents run, a stats row sits above them and a Running bar folds thei
   await end($, 'c1')
 
   await inPane($, async ui => {
-    expect(await shows(ui, /Total chat cost/)).toBe(true)
+    expect(await shows(ui, /^Total Cost$/)).toBe(true)
     expect(await shows(ui, /\$2\.38/)).toBe(true)
-    expect(await shows(ui, /Subagent tokens/)).toBe(true)
-    expect(await shows(ui, /^Time$/)).toBe(true)
+    expect(await shows(ui, /^Total Tokens$/)).toBe(true)
+    expect(await shows(ui, /^Total time$/)).toBe(true)
     expect((await ui.find({ type: 'Button', key: 'running-toggle' }))?.props.label).toBe('▾ Running · 2')
     expect(await shows(ui, /Scout the repo/)).toBe(true)
   })
@@ -669,7 +669,7 @@ test('while agents run, a stats row sits above them and a Running bar folds thei
   await end($, 'a1')
   await end($, 'b1')
   await inPane($, async ui => {
-    expect(await shows(ui, /Total chat cost/)).toBe(false)
+    expect(await shows(ui, /^Total Cost/)).toBe(false)
     expect(await ui.find({ type: 'Button', key: 'running-toggle' })).toBeUndefined()
   })
 })
