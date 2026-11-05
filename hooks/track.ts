@@ -89,6 +89,46 @@ export const describe = (
   }
 }
 
+// The kinds of work an activity falls into: agents doing similar work share a
+// colour. `color` is a terminal colour name, `fill` a desktop hex; both are
+// mid tones, readable on light and dark themes. Green, yellow and red mean an
+// outcome once an agent ends, so the desktop hues here keep clear of them.
+export type WorkKind = 'research' | 'web' | 'write' | 'verify' | 'commands' | 'delegate' | 'other'
+
+export type Work = { kind: WorkKind; label: string; color: string; fill: string }
+
+export const workColors: Readonly<Record<WorkKind, Work>> = {
+  research: { kind: 'research', label: 'Research', color: 'cyan', fill: '#06b6d4' },
+  web: { kind: 'web', label: 'Web research', color: 'blue', fill: '#3b82f6' },
+  write: { kind: 'write', label: 'Writing', color: 'magenta', fill: '#d946ef' },
+  verify: { kind: 'verify', label: 'Verifying', color: 'green', fill: '#84cc16' },
+  commands: { kind: 'commands', label: 'Commands', color: 'yellow', fill: '#f97316' },
+  delegate: { kind: 'delegate', label: 'Delegating', color: 'blueBright', fill: '#8b5cf6' },
+  other: { kind: 'other', label: 'Other work', color: 'gray', fill: '#64748b' },
+}
+
+const WORK_OF: Readonly<Record<string, WorkKind>> = {
+  Researching: 'research',
+  'Researching the web': 'web',
+  Writing: 'write',
+  'Writing report': 'write',
+  Verifying: 'verify',
+  'Running commands': 'commands',
+  Delegating: 'delegate',
+}
+
+// The kind of work an activity line (from `describe`) names; anything else
+// (a connector, an unknown tool, a fresh start) is other work.
+export const workOf = (activity: string): Work => workColors[WORK_OF[activity] ?? 'other']
+
+// The kinds of work the given running agents are doing, each once, in the
+// table's order: what the pane's colour key lists.
+export const workInUse = (rows: readonly AgentRow[]): Work[] => {
+  const kinds = new Set(rows.filter(row => row.status === 'running').map(row => workOf(row.activity).kind))
+
+  return Object.values(workColors).filter(work => kinds.has(work.kind))
+}
+
 // The engine knows no percent-complete, and an agent's step limit is not in
 // any event, so this is a curve over steps taken: quick at first, flattening
 // toward 95 until the agent finishes. The pane draws it with a "~".

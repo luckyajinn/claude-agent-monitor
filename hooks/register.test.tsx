@@ -27,6 +27,9 @@ import {
   trunc,
   usd,
   validTrail,
+  workColors,
+  workInUse,
+  workOf,
 } from './track'
 
 const PANE = {
@@ -215,6 +218,114 @@ test('the ETA waits for a basis, counts down between steps, and admits when it i
   const stepped = applyStep(newRow('c', 'x', 'Explore', MODEL, 0), USAGE, [], '', { now: 7000 })
   expect(stepped.lastStepAt).toBe(7000)
   expect(revive({ ...stepped, status: 'done' }, 9000).lastStepAt).toBe(9000)
+})
+
+test('activities fall into kinds of work, each with its own colour', () => {
+  const kindOf = (tool: string, args: Record<string, unknown> = {}) => workOf(describe(tool, args).activity).kind
+
+  // Similar work shares a kind.
+  expect(kindOf('Read', { file_path: 'a.ts' })).toBe('research')
+  expect(kindOf('Grep', { pattern: 'x' })).toBe('research')
+  expect(kindOf('Glob', { pattern: '*' })).toBe('research')
+  expect(kindOf('WebSearch', { query: 'x' })).toBe('web')
+  expect(kindOf('WebFetch', { url: 'x' })).toBe('web')
+  expect(kindOf('Edit', { file_path: 'a.ts' })).toBe('write')
+  expect(kindOf('Write', { file_path: 'a.ts' })).toBe('write')
+  expect(workOf('Writing report').kind).toBe('write')
+  expect(kindOf('Bash', { command: 'npm test' })).toBe('verify')
+  expect(kindOf('Bash', { command: 'ls' })).toBe('commands')
+  expect(kindOf('Agent', { description: 'x' })).toBe('delegate')
+  // A connector, an unknown tool or a fresh start falls to the default.
+  expect(kindOf('mcp__x__y')).toBe('other')
+  expect(kindOf('SomeNewTool')).toBe('other')
+  expect(workOf('Starting').kind).toBe('other')
+
+  // Different kinds differ in both colours.
+  const all = Object.values(workColors)
+  expect(new Set(all.map(work => work.color)).size).toBe(all.length)
+  expect(new Set(all.map(work => work.fill)).size).toBe(all.length)
+  expect(workOf('Researching').fill).not.toBe(workOf('Writing').fill)
+
+  // The key lists each kind a running agent is doing, once, and no finished one.
+  const r = (activity: string, status: 'running' | 'done' = 'running') => ({
+    ...newRow(activity, activity, 'x', MODEL, 0),
+    activity,
+    status,
+  })
+  expect(workInUse([r('Researching'), r('Researching'), r('Writing'), r('Verifying', 'done')]).map(w => w.kind)).toEqual([
+    'research',
+    'write',
+  ])
+  expect(workInUse([])).toEqual([])
+})
+
+test('agents doing similar work share a colour, and the key names what is on screen', async ($, on) => {
+  engine(on)
+  // Stands for whatever draws beneath the band.
+  on('ui.render', ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+
+    return <Text>beneath</Text>
+  })
+  const row = (id: string, activity: string, status: 'running' | 'done' = 'running') => ({
+    ...newRow(id, `Agent ${id}`, 'Explore', MODEL, 0),
+    activity,
+    status,
+    steps: 2,
+  })
+  const rows = [row('r1', 'Researching'), row('r2', 'Researching'), row('w1', 'Writing'), row('d1', 'Done', 'done')]
+  let trail: string[] = []
+  on('state.get', (_: unknown, e: { key?: string }) => ({
+    value: { value: e.key === 'path' ? trail : e.key === 'collapsed' ? false : rows, version: 1 },
+  }))
+  const colors = async (ui: any, text: RegExp) =>
+    (await ui.findAll({ type: 'Text', text })).map((found: any) => found.props.color)
+  // The progress bars, by the fill each one draws in.
+  const bars = async (ui: any) =>
+    (await ui.findAll({ type: 'Svg' }))
+      .map((found: any) => String(found.props.source))
+      .filter((source: string) => source.includes('viewBox="0 0 100 6"'))
+  const count = (sources: string[], fill: string) => sources.filter(source => source.includes(fill)).length
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // Both researchers share a colour; the writer differs; the finished one keeps green.
+  expect(await colors(ui, /^Researching$/)).toEqual([workColors.research.fill, workColors.research.fill])
+  expect(await colors(ui, /^Writing$/)).toEqual([workColors.write.fill])
+  expect(await colors(ui, /^Done$/)).toEqual(['green'])
+  const drawn = await bars(ui)
+  expect(count(drawn, workColors.research.fill)).toBe(2)
+  expect(count(drawn, workColors.write.fill)).toBe(1)
+  expect(count(drawn, '#4ade80')).toBe(1)
+  // The key lists the two kinds in use, and nothing else.
+  expect(await colors(ui, /^● Research$/)).toEqual([workColors.research.fill])
+  expect(await colors(ui, /^● Writing$/)).toEqual([workColors.write.fill])
+  expect(await ui.find({ type: 'Text', text: /^● Verifying$/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /Colour key/ })).toBeDefined()
+  await ui.unmount()
+
+  // The terminal draws the same colours by name.
+  const term = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await colors(term, /^Researching$/)).toEqual([workColors.research.color, workColors.research.color])
+  expect(await colors(term, /^Writing$/)).toEqual([workColors.write.color])
+  await term.unmount()
+
+  // The band takes the latest running agent's colour.
+  const band = await $.ui.mount({
+    plugin: 'agent-monitor',
+    component: 'AbovePrompt',
+    requestId: 'band',
+    props: { hasSurvey: false },
+    surface: 'desktop',
+  })
+  expect(await colors(band, /3 agents running/)).toEqual([workColors.write.fill])
+  await band.unmount()
+
+  // An opened agent's detail view uses its card's colour.
+  trail = ['w1']
+  const detail = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await colors(detail, /^Writing$/)).toEqual([workColors.write.fill])
+  expect(count(await bars(detail), workColors.write.fill)).toBe(1)
+  await detail.unmount()
 })
 
 test('the card and the detail show the ETA of a running agent', async ($, on) => {
