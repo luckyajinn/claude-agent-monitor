@@ -13,7 +13,9 @@ import {
   clock,
   fill,
   finish,
+  isGoing,
   isKnownRate,
+  LIVE,
   newRow,
   patch,
   prettyModel,
@@ -67,9 +69,6 @@ const ICONS: Record<AgentStatus, string> = {
   stopped: '■',
 }
 
-// What the engine calls an agent that is still going.
-const LIVE = new Set(['pending', 'running', 'waiting'])
-
 type SvgElement = (props: {
   source: string
   alt: string
@@ -92,28 +91,37 @@ const accentOf = (row: AgentRow, hasSvg: boolean): { color: string; fill: string
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
-// The ids the engine lists as still going (pending, running or waiting);
+// Every agent the engine lists, by id, with the engine's status for it;
 // undefined when its list cannot be read.
-const goingIds = async ($: EngineInterface): Promise<Set<string> | undefined> => {
+const listedStatuses = async ($: EngineInterface): Promise<Map<string, string> | undefined> => {
   try {
-    return new Set((await $.agent.list()).filter(one => LIVE.has(one.status)).map(one => one.id))
+    return new Map((await $.agent.list()).map(one => [one.id, one.status] as const))
   } catch {
     return undefined
   }
 }
 
-// An agent is active when its card says it is running or the engine lists it
-// as going: the engine can call an agent pending or waiting where the card has
-// only "running" or an end. With no list to ask, the card alone decides.
-const activeIn = (going: Set<string> | undefined) => (row: AgentRow) =>
-  LIVE.has(row.status) || going?.has(row.id) === true
+// The ids the engine lists as still going (pending, running or waiting);
+// undefined when its list cannot be read.
+const goingIds = async ($: EngineInterface): Promise<Set<string> | undefined> => {
+  const listed = await listedStatuses($)
 
-// "Clear finished": drops the cards of agents that are done, stopped or failed
-// and keeps every active agent, with the parents it sits under. The rows are
-// judged inside the write, so one that came alive since the pane was drawn
-// stays. The breadcrumb is cut back only if a card it names went.
+  return listed === undefined
+    ? undefined
+    : new Set([...listed].filter(([, status]) => LIVE.has(status)).map(([id]) => id))
+}
+
+// Which agents a clear keeps, given the engine's list from `listedStatuses`:
+// see `isGoing`. A card stuck at "running" (the engine names it as ended) is
+// clearable; one the engine does not name, or with no list, is not.
+const activeIn = (listed: Map<string, string> | undefined) => (row: AgentRow) => isGoing(row, listed)
+
+// "Clear finished": drops the cards of agents that are done, stopped or failed,
+// and stuck cards, and keeps every active agent, with the parents it sits
+// under. The rows are judged inside the write, so one that came alive since the
+// pane was drawn stays. The breadcrumb is cut back only if a card it names went.
 const clearFinished = async ($: EngineInterface) => {
-  const isActive = activeIn(await goingIds($))
+  const isActive = activeIn(await listedStatuses($))
 
   await update($, agents, list => {
     const kept = survivors(list, isActive)
@@ -329,8 +337,9 @@ export const register: Register = on => {
     const running = all.filter(row => row.status === 'running').length
     const total = all.reduce((sum, row) => sum + row.costUsd, 0)
     // What "Clear finished" would do now, so the button can say so: active
-    // agents stay, and so does a finished parent that has one beneath it.
-    const isActive = activeIn(await goingIds($))
+    // agents stay, and so does a finished parent that has one beneath it; a
+    // stuck card counts as clearable, not as still running.
+    const isActive = activeIn(await listedStatuses($))
     const active = all.filter(isActive).length
     const clearable = all.length - survivors(all, isActive).length
     const parents = all.length - clearable - active

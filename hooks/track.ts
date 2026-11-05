@@ -374,6 +374,30 @@ export const survivors = (list: AgentRow[], isActive: (row: AgentRow) => boolean
   return list.filter(row => keep.has(row.id))
 }
 
+// What the engine calls an agent that is still going.
+export const LIVE: ReadonlySet<string> = new Set(['pending', 'running', 'waiting'])
+
+// Whether a clear must keep this row's card, given the engine's list of agents
+// (id to its status; undefined when the list cannot be read). The engine going
+// beats the card: it can call an agent pending or waiting where the card has
+// an end. A card saying "running" stays, unless the engine names that id with
+// a status that is not going (completed, failed, killed, idle): then its end
+// was missed and the card is stuck. An id the list does not name, or no list,
+// leaves the card to decide, so a real agent is never cleared by mistake. The
+// main agent's row is never in the engine's list, so its card alone decides.
+export const isGoing = (row: AgentRow, listed: ReadonlyMap<string, string> | undefined): boolean => {
+  const engine = listed?.get(row.id)
+
+  if (engine !== undefined && LIVE.has(engine)) {
+    return true
+  }
+  if (row.status !== 'running') {
+    return false
+  }
+
+  return row.id === MAIN_ID || engine === undefined
+}
+
 // The breadcrumb after rows went: untouched while every card it names is still
 // there, else cut back to the longest part that is.
 export const trailAfter = (list: AgentRow[], trail: string[]): string[] =>

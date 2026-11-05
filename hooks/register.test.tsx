@@ -16,6 +16,7 @@ import {
   familyOf,
   fill,
   finish,
+  isGoing,
   isKnownRate,
   MAIN_ID,
   newMain,
@@ -1197,6 +1198,93 @@ test('a new prompt and a lost card are cleared as before, and Clear finished lea
     expect(await shows(ui, /Scout the repo/)).toBe(true)
     expect(await shows(ui, /Old report/)).toBe(false)
     expect(await shows(ui, /Lint the code/)).toBe(false)
+  })
+})
+
+test('isGoing: a running card the engine names as ended is stuck; one it does not name stays', () => {
+  const running = newRow('a', 'x', 'Explore', MODEL, 0)
+  const done = finish(newRow('b', 'y', 'Explore', MODEL, 0), 'done', 5)
+  const main = newMain(0)
+  const listed = (status: string, id = 'a') => new Map([[id, status]])
+
+  // The engine names it with an ended status: the card is stuck, so it can go.
+  for (const status of ['completed', 'failed', 'killed', 'idle']) {
+    expect(isGoing(running, listed(status))).toBe(false)
+  }
+  // The engine has it going: it stays.
+  for (const status of ['pending', 'running', 'waiting']) {
+    expect(isGoing(running, listed(status))).toBe(true)
+  }
+  // Not named, or no list at all: the card decides, and it says running.
+  expect(isGoing(running, new Map())).toBe(true)
+  expect(isGoing(running, listed('completed', 'other'))).toBe(true)
+  expect(isGoing(running, undefined)).toBe(true)
+  // A finished card stays only while the engine has it going.
+  expect(isGoing(done, listed('waiting', 'b'))).toBe(true)
+  expect(isGoing(done, listed('completed', 'b'))).toBe(false)
+  expect(isGoing(done, undefined)).toBe(false)
+  // The main agent's running row never goes, whatever a list says of its id.
+  expect(isGoing(main, listed('completed', MAIN_ID))).toBe(true)
+  expect(isGoing(main, new Map())).toBe(true)
+  expect(isGoing(finish(main, 'done', 5), new Map())).toBe(false)
+})
+
+test('Clear finished clears a stuck card the engine lists as ended, never a real one', async ($, on) => {
+  let listed: { id: string; status: string }[] = []
+  let isBroken = false
+  const list = () => {
+    if (isBroken) {
+      throw new Error('no list')
+    }
+
+    return { value: listed }
+  }
+  engine(on, { list }, ['a1', 'b1', 'c1', 'd1', 'e1'])
+  on('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
+
+  await $.session.start(START)
+  // The main agent's loop is running too; the engine never lists it.
+  await $.turn.start({ turnId: 'main-1', text: 'go' })
+  await spawn($, 'Stuck one') // a1: says running, the engine says completed
+  await spawn($, 'Real one') // b1: says running, the engine agrees
+  await spawn($, 'Unlisted one') // c1: says running, the engine does not name it
+  await spawn($, 'Stuck parent') // d1: says running, the engine says killed
+  await spawn($, 'Finished child', 'd1') // e1: finished, inside d1
+  await end($, 'e1')
+  listed = [
+    { id: 'a1', status: 'completed' },
+    { id: 'b1', status: 'running' },
+    { id: 'd1', status: 'killed' },
+    { id: 'e1', status: 'completed' },
+    { id: MAIN_ID, status: 'completed' },
+  ]
+
+  // The two stuck cards and the finished child count as clearable; the real
+  // one, the unlisted one and the main agent are the three still running.
+  expect(await clearButton($)).toEqual({
+    label: 'Clear finished (3)',
+    isDim: false,
+    note: '3 still running stay',
+  })
+
+  await pressed($, 'clear')
+
+  await inPane($, async ui => {
+    expect(await shows(ui, /Main Claude Agent/)).toBe(true)
+    expect(await shows(ui, /Real one/)).toBe(true)
+    expect(await shows(ui, /Unlisted one/)).toBe(true)
+    expect(await shows(ui, /Stuck one/)).toBe(false)
+    expect(await shows(ui, /Stuck parent/)).toBe(false)
+    expect(await shows(ui, /Finished child/)).toBe(false)
+  })
+  expect(await clearButton($)).toEqual({ label: 'Clear finished', isDim: true, note: '3 still running stay' })
+
+  // With no list to read, a card that says running is trusted again.
+  listed = [{ id: 'b1', status: 'completed' }]
+  isBroken = true
+  await pressed($, 'clear')
+  await inPane($, async ui => {
+    expect(await shows(ui, /Real one/)).toBe(true)
   })
 })
 
