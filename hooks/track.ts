@@ -412,6 +412,20 @@ export const survivors = (list: AgentRow[], isActive: (row: AgentRow) => boolean
   return list.filter(row => keep.has(row.id))
 }
 
+// What a new prompt keeps on its own merit, given the ids the engine lists as
+// going (pending, running or waiting; undefined when its list cannot be read).
+// With a list, the engine decides: a listed agent stays whatever its card says
+// (a "done" card may be going again), and a "running" card it no longer lists
+// goes, so a missed end never leaves a card stuck. With no list, the card
+// decides: only a "running" one stays. The main agent's row never stays on its
+// own (the engine never lists it; the new prompt starts a new main turn, which
+// makes a fresh row): it stays only as the parent of a row kept here. Pass this
+// to `survivors`, which also keeps every ancestor of a kept row.
+export const keptAtPrompt =
+  (going: ReadonlySet<string> | undefined) =>
+  (row: AgentRow): boolean =>
+    row.id !== MAIN_ID && (going === undefined ? row.status === 'running' : going.has(row.id))
+
 // The breadcrumb after rows went: untouched while every card it names is still
 // there, else cut back to the longest part that is.
 export const trailAfter = (list: AgentRow[], trail: string[]): string[] =>

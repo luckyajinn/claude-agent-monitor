@@ -17,6 +17,7 @@ import {
   fill,
   finish,
   isKnownRate,
+  keptAtPrompt,
   MAIN_ID,
   newMain,
   newRow,
@@ -527,6 +528,43 @@ test('a clear keeps the active rows and every ancestor of one, and trims the tra
   expect(trailAfter(left, ['p', 'k', 'g'])).toEqual(['p', 'k', 'g'])
   expect(trailAfter(left, ['q'])).toEqual([])
   expect(trailAfter(left, ['p', 'q'])).toEqual(['p'])
+})
+
+test('a new prompt keeps what the engine lists as going whatever the card says, and the main row only as a parent', () => {
+  const r = (id: string, status: 'running' | 'done' | 'failed', parentId: string | null = null) => ({
+    ...newRow(id, id, 'x', MODEL, 0, parentId),
+    status,
+  })
+  const ids = (rows: { id: string }[]) => rows.map(row => row.id)
+  const kept = keptAtPrompt(new Set(['w', 'k']))
+
+  // The engine's list decides: a done card it lists as going stays, as with
+  // Clear finished; a running card it no longer lists is stuck and goes.
+  expect(kept(r('w', 'done'))).toBe(true)
+  expect(kept(r('k', 'running'))).toBe(true)
+  expect(kept(r('s', 'running'))).toBe(false)
+  expect(kept(r('f', 'failed'))).toBe(false)
+  // With no list to ask, the card decides.
+  expect(keptAtPrompt(undefined)(r('s', 'running'))).toBe(true)
+  expect(keptAtPrompt(undefined)(r('w', 'done'))).toBe(false)
+  // The main row never stays on its own, running or not, list or no list.
+  const main = newMain(0)
+  expect(main.status).toBe('running')
+  expect(kept(main)).toBe(false)
+  expect(keptAtPrompt(undefined)(main)).toBe(false)
+  expect(keptAtPrompt(new Set([MAIN_ID]))(main)).toBe(false)
+
+  // With `survivors`: every ancestor of a kept row stays, the main row too.
+  const tree = [
+    { ...main, status: 'done' as const },
+    r('p', 'done', MAIN_ID),
+    r('w', 'done', 'p'),
+    r('s', 'running', MAIN_ID),
+    r('o', 'done', MAIN_ID),
+  ]
+  expect(ids(survivors(tree, kept))).toEqual(['main', 'p', 'w'])
+  expect(survivors(tree, keptAtPrompt(new Set()))).toEqual([])
+  expect(ids(survivors(tree, keptAtPrompt(undefined)))).toEqual(['main', 's'])
 })
 
 test('a subagent appears, works and finishes in the pane', async ($, on) => {
@@ -1301,6 +1339,67 @@ test('a new prompt keeps a finished parent of an agent still going, so the child
   await inPane($, async ui => {
     expect((await ui.find({ type: 'Text' }))?.text).toContain('No subagents yet')
   })
+})
+
+test('a new prompt keeps a done card the engine lists as going, as Clear finished does', async ($, on) => {
+  let listed: { id: string; status: string }[] = []
+  engine(on, { list: () => ({ value: listed }) }, ['a1', 'b1', 'c1', 'd1', 'e1'])
+  on('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
+  const held = keepState(on)
+  const ids = () => ((held('agents') ?? []) as { id: string }[]).map(row => row.id)
+  const prompt = (text: string) => $.prompt.submit({ text, origin: { kind: 'composer' } })
+
+  await $.session.start(START)
+  await $.turn.start({ text: 'look into the repo', turnId: 'main-1' })
+  await spawn($, 'Resumed helper') // a1: done, the engine has it waiting
+  await spawn($, 'Finished parent') // b1: done, the engine is through with it
+  await spawn($, 'Pending child', 'b1') // c1: done, the engine has it pending
+  await spawn($, 'Lost runner') // d1: says running, the engine lost it
+  await spawn($, 'Old report') // e1: done, and over
+  for (const id of ['a1', 'b1', 'c1', 'e1']) {
+    await end($, id)
+  }
+  await $.turn.complete({ ...END, turnId: 'main-1', usage: USAGE })
+  listed = [
+    { id: 'a1', status: 'waiting' },
+    { id: 'b1', status: 'completed' },
+    { id: 'c1', status: 'pending' },
+    { id: 'e1', status: 'completed' },
+  ]
+
+  await prompt('next question')
+  // The listed ones stay whatever their cards say, with the parents they sit
+  // under (the finished main row among them); the stuck and the over go.
+  expect(ids()).toEqual(['main', 'a1', 'b1', 'c1'])
+  await inPane($, async ui => {
+    expect(await shows(ui, /Resumed helper/)).toBe(true)
+    expect(await shows(ui, /Finished parent/)).toBe(true)
+    expect(await shows(ui, /Pending child/)).toBe(true)
+    expect(await shows(ui, /Lost runner/)).toBe(false)
+    expect(await shows(ui, /Old report/)).toBe(false)
+  })
+  // The two rules agree: Clear finished has nothing more to take.
+  await pressed($, 'clear')
+  expect(ids()).toEqual(['main', 'a1', 'b1', 'c1'])
+
+  // Once the engine is through with them, they go, and the main row with them.
+  listed = []
+  await prompt('and again')
+  expect(ids()).toEqual([])
+
+  // A main row still running at a new prompt goes too (the engine never lists
+  // it, so a missed end cannot be told apart): the next main turn makes a
+  // fresh one.
+  await $.turn.start({ text: 'one more', turnId: 'main-2' })
+  for await (const _chunk of $.turn.step({ ...STEP, turnId: 'main-2' })) {
+    // Drained for its effect on the main row.
+  }
+  expect(ids()).toEqual(['main'])
+  await prompt('and once more')
+  expect(ids()).toEqual([])
+  await $.turn.start({ text: 'fresh', turnId: 'main-3' })
+  const [main] = held('agents') as { id: string; status: string; steps: number }[]
+  expect(main).toMatchObject({ id: 'main', status: 'running', steps: 0 })
 })
 
 test('state saved by an older version still draws, in a narrow pane too', async ($, on) => {
