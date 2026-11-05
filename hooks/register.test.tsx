@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { crabAlt, crabSvg, crabText, lookOf } from './crab'
+import { crabAlt, crabSvg, crabText, lookOf, wireSvg } from './crab'
 
 import {
   applyStep,
@@ -428,6 +428,86 @@ test('the main agent is tracked as the root of the tree, and the band leaves it 
   await inPane($, async ui => {
     expect((await ui.findAll({ type: 'Text', text: /^✔/ })).length).toBeGreaterThan(0)
   })
+})
+
+test('the tree lines are drawn as pictures that span each row, so they meet', () => {
+  const tall = wireSvg('│   ├── ', 24)
+  // Two steps of 20px, the full row height.
+  expect(tall).toContain('width="40" height="24"')
+  // The │ and the ├ both run top to bottom; the ├ branches off at mid-height.
+  expect(tall).toContain('M7.5 0V24')
+  expect(tall).toContain('M27.5 0V24M27.5 12.5H38')
+  // └ stops at the branch; a blank step draws nothing.
+  expect(wireSvg('    └── ', 24)).toContain('M27.5 0V12.5H38')
+  expect(wireSvg('    ', 22)).not.toContain('<path')
+})
+
+test('the pane draws tree lines as pictures on the desktop, and as text in the terminal', async ($, on) => {
+  engine(on)
+  await $.session.start(START)
+  await spawn($, 'Scout the repo')
+
+  await inPane($, async ui => {
+    const lines = (await ui.findAll({ type: 'Svg' })).filter((one: any) => one.props.source.includes('stroke-width="1.5"'))
+    expect(lines.length).toBeGreaterThan(0)
+    expect(await shows(ui, /^└── $/)).toBe(false)
+  })
+  await inPane(
+    $,
+    async ui => {
+      expect(await shows(ui, /^└── $/)).toBe(true)
+    },
+    'terminal',
+  )
+})
+
+test('the Crab button switches between the model skins and the classic crab', async ($, on) => {
+  engine(on)
+  keepState(on)
+  await $.session.start(START)
+  await spawn($, 'Scout the repo')
+
+  const crab = (surface = 'desktop') =>
+    inPane(
+      $,
+      async ui => {
+        const button = await ui.find({ type: 'Button', key: 'skins-toggle' })
+        const svg = (await ui.findAll({ type: 'Svg' })).find((one: any) => /crab/i.test(one.props.alt))
+
+        return { label: button?.props.label, alt: svg?.props.alt }
+      },
+      surface,
+    )
+
+  // Skins by default: the Sonnet crab.
+  expect(await crab()).toEqual({ label: 'Crab: model skins', alt: 'Sonnet crab, running' })
+
+  await pressed($, 'skins-toggle')
+  expect(await crab()).toEqual({ label: 'Crab: classic', alt: 'Crab, running' })
+  await inPane(
+    $,
+    async ui => {
+      expect(await shows(ui, /^\\o_o\/$/)).toBe(true)
+    },
+    'terminal',
+  )
+
+  await pressed($, 'skins-toggle')
+  expect(await crab()).toEqual({ label: 'Crab: model skins', alt: 'Sonnet crab, running' })
+})
+
+test('with crabSkins off in /config the classic crab is the default, and the button still switches', { options: { crabSkins: false } }, async ($, on) => {
+  engine(on)
+  keepState(on)
+  await $.session.start(START)
+  await spawn($, 'Scout the repo')
+
+  const alt = () =>
+    inPane($, async ui => (await ui.findAll({ type: 'Svg' })).find((one: any) => /crab/i.test(one.props.alt))?.props.alt)
+
+  expect(await alt()).toBe('Crab, running')
+  await pressed($, 'skins-toggle')
+  expect(await alt()).toBe('Sonnet crab, running')
 })
 
 test('the cap drops finished rows first, and the tree helpers walk parents', () => {

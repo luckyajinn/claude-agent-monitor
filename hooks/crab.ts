@@ -48,6 +48,36 @@ export const crabAlt = (status: AgentStatus, model = ''): string => {
 // The crab as text, for the terminal: `\o_o/`, or the family's own variant.
 export const crabText = (model = ''): string => lookOf(model)?.text ?? '\\o_o/'
 
+// The tree's connectors as a picture, for the surfaces that draw them: each
+// four-character step of `prefix` (`│   `, `├── `, `└── ` or blank) is a column
+// `WIRE_STEP` pixels wide. A drawn line spans the whole `height`, so the lines of
+// one card meet those of the next with no gap, as text glyphs cannot promise.
+export const WIRE_STEP = 20
+
+export const wireSvg = (prefix: string, height: number, color = '#8a8780'): string => {
+  const steps = prefix.match(/.{1,4}/gu) ?? []
+  const x = 7.5
+  const mid = Math.round(height / 2) + 0.5
+  const parts = steps.map((step, i) => {
+    const at = i * WIRE_STEP + x
+    const end = i * WIRE_STEP + WIRE_STEP - 2
+
+    switch (step[0]) {
+      case '│':
+        return `<path d="M${at} 0V${height}"/>`
+      case '├':
+        return `<path d="M${at} 0V${height}M${at} ${mid}H${end}"/>`
+      case '└':
+        return `<path d="M${at} 0V${mid}H${end}"/>`
+      default:
+        return ''
+    }
+  })
+  const width = steps.length * WIRE_STEP
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><g fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="square" shape-rendering="crispEdges">${parts.join('')}</g></svg>`
+}
+
 // A rounded progress bar: a faint track and a filled run, `percent` of it.
 export const barSvg = (percent: number, color: string): string =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 6" preserveAspectRatio="none"><rect width="100" height="6" rx="3" fill="#888" opacity="0.25"/><rect width="${Math.max(6, percent)}" height="6" rx="3" fill="${color}"/></svg>`

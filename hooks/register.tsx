@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentRow, AgentStatus } from '../types'
-import { barSvg, crabAlt, crabSvg, crabText } from './crab'
+import { barSvg, crabAlt, crabSvg, crabText, WIRE_STEP, wireSvg } from './crab'
 import {
   addUsage,
   applyStep,
@@ -48,6 +48,9 @@ const SHOWN_FINISHED = 8
 const agents = atom({ plugin: 'agent-monitor', key: 'agents' } as const, [])
 const path = atom({ plugin: 'agent-monitor', key: 'path' } as const, [])
 const collapsed = atom({ plugin: 'agent-monitor', key: 'collapsed' } as const, false)
+// The pane's crab toggle for this session: true for the model skins, false
+// for the classic crab, null to follow the `crabSkins` setting in /config.
+const skins = atom({ plugin: 'agent-monitor', key: 'skins' } as const, null)
 
 const COLORS: Record<AgentStatus, string> = {
   running: 'cyan',
@@ -160,7 +163,11 @@ const ensure = async ($: EngineInterface, id: string, model: string, now: number
   )
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  // The lasting default for the crab's look, set in /config (on unless set
+  // off); the pane's toggle overrides it for the session.
+  const skinsByDefault = options?.crabSkins !== false
+  const skinsOn = (value: unknown) => (typeof value === 'boolean' ? value : skinsByDefault)
   let isShown = false
   // The task an agent was given and its final report are free text: they stay
   // in this module, not in `$.state`, which any plugin in the session can read.
@@ -359,11 +366,24 @@ export const register: Register = on => {
     const openTo = (row: AgentRow) => update($, path, () => [...trail, row.id])
     const insideOf = (row: AgentRow) => childrenOf(all, row.id).length
     const spent = (row: AgentRow) => clock((row.endedAt ?? now) - row.startedAt)
+    // With the skins off, every crab is the classic one: no model, no look.
+    const skinned = skinsOn(await read($, skins))
+    const skinOf = (row: AgentRow) => (skinned ? row.model : '')
 
-    // The tree's connectors, in the monospaced face so the │ lines up. Spaces
-    // are no-break spaces, so no surface folds the indent away.
-    const wire = (prefix: string, key: string) =>
-      prefix === '' ? null : (
+    // The tree's connectors. Where pictures draw, a picture `height` pixels
+    // tall, so a line meets the next one with no gap between rows. In the
+    // terminal, text in the monospaced face (every row is one cell high
+    // there); its spaces are no-break spaces, so nothing folds the indent away.
+    const wire = (prefix: string, key: string, height = 22) =>
+      prefix === '' ? null : hasSvg ? (
+        <Svg
+          key={key}
+          source={wireSvg(prefix, height)}
+          alt=""
+          width={(prefix.length / 4) * WIRE_STEP}
+          height={height}
+        />
+      ) : (
         <Text key={key} mono dimColor>
           {prefix.replace(/ /g, ' ')}
         </Text>
@@ -382,9 +402,12 @@ export const register: Register = on => {
         </Text>
       )
       const activity = <Text color={color}>{row.activity}</Text>
+      // Each row's picture is at least as tall as what it holds, so the rows,
+      // and the lines down their left, sit edge to edge.
+      const ROW_HEIGHT: Record<string, number> = { title: 24, crab: 34, gap: 8 }
       const line = (key: string, prefix: string, content: unknown) => (
         <Box key={`${key}-${row.id}`} alignItems="center">
-          {wire(prefix, `wire-${key}-${row.id}`)}
+          {wire(prefix, `wire-${key}-${row.id}`, ROW_HEIGHT[key] ?? 22)}
           {content as never}
         </Box>
       )
@@ -446,11 +469,11 @@ export const register: Register = on => {
             body,
             <Box gap={1} alignItems="center">
               {!hasSvg ? (
-                <Text color="red">{crabText(row.model)}</Text>
+                <Text color="red">{crabText(skinOf(row))}</Text>
               ) : (
                 <Svg
-                  source={crabSvg(row.status, row.model)}
-                  alt={crabAlt(row.status, row.model)}
+                  source={crabSvg(row.status, skinOf(row))}
+                  alt={crabAlt(row.status, skinOf(row))}
                   width={48}
                   height={32}
                   isInteractive={row.status === 'running'}
@@ -485,11 +508,11 @@ export const register: Register = on => {
         <Box key={`detail-${row.id}`} flexDirection="column" gap={1} borderStyle="round" borderColor={color} paddingX={1}>
           <Box gap={1} alignItems="center">
             {!hasSvg ? (
-              <Text color="red">{crabText(row.model)}</Text>
+              <Text color="red">{crabText(skinOf(row))}</Text>
             ) : (
               <Svg
-                source={crabSvg(row.status, row.model)}
-                alt={crabAlt(row.status, row.model)}
+                source={crabSvg(row.status, skinOf(row))}
+                alt={crabAlt(row.status, skinOf(row))}
                 width={48}
                 height={32}
                 isInteractive={row.status === 'running'}
@@ -631,6 +654,12 @@ export const register: Register = on => {
             onPress={() => clearFinished($)}
           />
           {staying === '' ? null : <Text dimColor>{staying}</Text>}
+          <Button
+            key="skins-toggle"
+            plain
+            label={skinned ? 'Crab: model skins' : 'Crab: classic'}
+            onPress={() => update($, skins, value => !skinsOn(value))}
+          />
         </Box>
         {trail.length > 0 && (
           <Box gap={1} flexWrap="wrap">
@@ -669,7 +698,7 @@ export const register: Register = on => {
           {current !== undefined ? null : main === undefined ? (
             <Box key="main-name" flexDirection="column">
               <Text weight="bold">{MAIN_NAME}</Text>
-              {rootBody === '' ? null : wire(rootBody, 'wire-main-gap')}
+              {rootBody === '' ? null : wire(rootBody, 'wire-main-gap', 8)}
             </Box>
           ) : (
             card(main, '', rootBody)
@@ -680,8 +709,8 @@ export const register: Register = on => {
                 item.kind === 'row' ? (
                   card(item.row, item.lead, item.body)
                 ) : (
-                  <Box key={`more-${item.lead.length}-${item.hidden}`}>
-                    {wire(item.lead, `wire-more-${item.lead.length}`)}
+                  <Box key={`more-${item.lead.length}-${item.hidden}`} alignItems="center">
+                    {wire(item.lead, `wire-more-${item.lead.length}`, 24)}
                     <Text dimColor>+{item.hidden} earlier finished</Text>
                   </Box>
                 ),

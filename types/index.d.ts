@@ -45,6 +45,8 @@ declare module 'claude-code' {
       path: string[]
       /** True while the pane's "Running" group is folded away. */
       collapsed: boolean
+      /** The pane's crab toggle: true for model skins, false for the classic crab, null to follow /config. */
+      skins: boolean | null
     }
   }
 }

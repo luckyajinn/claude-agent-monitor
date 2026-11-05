@@ -1,10 +1,18 @@
 {
   "name": "agent-monitor",
-  "version": "0.6.0",
+  "version": "1.0.0",
   "description": "A live pane that tracks the main agent and every subagent as a tree: model, estimated progress and time left, estimated cost and what each is doing right now.",
   "author": { "name": "luckyajinnITsolutions" },
   "homepage": "https://github.com/luckyajinn/claude-agent-monitor",
   "repository": "https://github.com/luckyajinn/claude-agent-monitor",
   "license": "MIT",
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "crabSkins": {
+      "type": "boolean",
+      "title": "Model crab skins",
+      "description": "Give each model family its own crab look (Haiku, Sonnet, Opus, Fable). Off: the classic crab for every agent. The pane's Crab button switches it for the current session.",
+      "default": true
+    }
+  }
 }
