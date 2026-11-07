@@ -1,6 +1,6 @@
 {
   "name": "agent-monitor",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A live pane that tracks the main agent and every subagent as a tree: model, estimated progress and time left, estimated cost and what each is doing right now.",
   "author": { "name": "luckyajinnITsolutions" },
   "homepage": "https://github.com/luckyajinn/claude-agent-monitor",
@@ -12,6 +12,12 @@
       "type": "boolean",
       "title": "Model crab skins",
       "description": "Give each model family its own crab look (Haiku, Sonnet, Opus, Fable). Off: the classic crab for every agent. The pane's Crab button switches it for the current session.",
+      "default": true
+    },
+    "chime": {
+      "type": "boolean",
+      "title": "Completion chime",
+      "description": "A soft ding when a subagent finishes its task, and a fuller chime once the main agent and every subagent are done. The pane's Chime button mutes or unmutes it for the current session. Plays in the desktop app and on macOS; a Windows or Linux terminal has no player and stays quiet.",
       "default": true
     }
   }

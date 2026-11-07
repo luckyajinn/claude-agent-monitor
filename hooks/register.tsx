@@ -22,6 +22,8 @@ import {
   prettyModel,
   progressOf,
   revive,
+  CHIMES,
+  chimeAfter,
   MAIN_ID,
   MAIN_NAME,
   newMain,
@@ -51,6 +53,9 @@ const collapsed = atom({ plugin: 'agent-monitor', key: 'collapsed' } as const, f
 // The pane's crab toggle for this session: true for the model skins, false
 // for the classic crab, null to follow the `crabSkins` setting in /config.
 const skins = atom({ plugin: 'agent-monitor', key: 'skins' } as const, null)
+// The pane's chime toggle for this session: true on, false muted, null to
+// follow the `chime` setting in /config.
+const chime = atom({ plugin: 'agent-monitor', key: 'chime' } as const, null)
 
 const COLORS: Record<AgentStatus, string> = {
   running: 'cyan',
@@ -168,6 +173,9 @@ export const register: Register = (on, options) => {
   // off); the pane's toggle overrides it for the session.
   const skinsByDefault = options?.crabSkins !== false
   const skinsOn = (value: unknown) => (typeof value === 'boolean' ? value : skinsByDefault)
+  // The same for the completion chime: on unless set off in /config.
+  const chimeByDefault = options?.chime !== false
+  const chimeOn = (value: unknown) => (typeof value === 'boolean' ? value : chimeByDefault)
   let isShown = false
   // The task an agent was given and its final report are free text: they stay
   // in this module, not in `$.state`, which any plugin in the session can read.
@@ -310,12 +318,21 @@ export const register: Register = (on, options) => {
         await ensure($, id, e.usage?.model ?? '', now)
         // Set before the write below, which redraws the pane.
         notes.set(id, { prompt: notes.get(id)?.prompt ?? '', report: trunc(e.answer, 500) })
+        const wasRunning = (await read($, agents)).some(row => row.id === id && row.status === 'running')
         // The turn's own summed usage stands in when no step of it was heard.
         await update($, agents, list =>
           patch(list, id, row =>
             finish(row.steps === 0 ? addUsage(row, e.usage) : row, status, now),
           ),
         )
+        // A ding for a subagent done, a chime once everything is. Not awaited:
+        // the turn's end never waits on a sound, and a surface that cannot
+        // play one (a Windows or Linux terminal) just stays quiet.
+        const sound = chimeAfter(await read($, agents), id, status, wasRunning)
+        if (sound !== null && chimeOn(await read($, chime))) {
+          const { asset, gain } = CHIMES[sound]
+          void $.audio.play({ asset }, { gain }).catch(() => undefined)
+        }
       } catch {
         // The card may stay at "running"; the turn still ends.
       }
@@ -369,6 +386,7 @@ export const register: Register = (on, options) => {
     // With the skins off, every crab is the classic one: no model, no look.
     const skinned = skinsOn(await read($, skins))
     const skinOf = (row: AgentRow) => (skinned ? row.model : '')
+    const chiming = chimeOn(await read($, chime))
 
     // The tree's connectors. Where pictures draw, a picture `height` pixels
     // tall, so a line meets the next one with no gap between rows. In the
@@ -659,6 +677,12 @@ export const register: Register = (on, options) => {
             plain
             label={skinned ? 'Crab: model skins' : 'Crab: classic'}
             onPress={() => update($, skins, value => !skinsOn(value))}
+          />
+          <Button
+            key="chime-toggle"
+            plain
+            label={chiming ? 'Chime: on' : 'Chime: off'}
+            onPress={() => update($, chime, value => !chimeOn(value))}
           />
         </Box>
         {trail.length > 0 && (

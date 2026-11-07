@@ -590,3 +590,27 @@ export const runningFor = (rows: AgentRow[], now: number): number | null => {
 
 export const tokens = (n: number): string =>
   n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)
+
+// The sound an agent's end makes. `chime` once everything is done: no other
+// card still says running (the main agent and background subagents alike).
+// Otherwise a soft `ding` for a subagent that finished its task. Nothing for an
+// end the person caused (stopped), nor for a card that was not running (a
+// repeated end), so one burst of work chimes once.
+export type Chime = 'chime' | 'ding' | null
+
+export const chimeAfter = (list: AgentRow[], id: string, status: AgentStatus, wasRunning: boolean): Chime => {
+  if (!wasRunning || status === 'stopped') {
+    return null
+  }
+  if (!list.some(row => row.id !== id && row.status === 'running')) {
+    return 'chime'
+  }
+
+  return id !== MAIN_ID && status === 'done' ? 'ding' : null
+}
+
+// The clip each sound plays, from the plugin's own folder, and how loud.
+export const CHIMES = {
+  chime: { asset: 'sounds/chime.wav', gain: 0.8 },
+  ding: { asset: 'sounds/ding.wav', gain: 0.45 },
+} as const

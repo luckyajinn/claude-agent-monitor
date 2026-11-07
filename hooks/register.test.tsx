@@ -5,6 +5,7 @@ import { crabAlt, crabSvg, crabText, lookOf, wireSvg } from './crab'
 import {
   applyStep,
   capRows,
+  chimeAfter,
   childrenOf,
   costOf,
   costParts,
@@ -508,6 +509,111 @@ test('with crabSkins off in /config the classic crab is the default, and the but
   expect(await alt()).toBe('Crab, running')
   await pressed($, 'skins-toggle')
   expect(await alt()).toBe('Sonnet crab, running')
+})
+
+test('a subagent done dings, and everything done chimes once', () => {
+  const r = (id: string, status: 'running' | 'done' | 'failed' | 'stopped') => ({ ...newRow(id, id, 'Explore', MODEL, 0, MAIN_ID), status })
+  const main = (status: 'running' | 'done') => ({ ...newMain(0), status })
+
+  // A subagent finishes while the main agent works: a soft ding.
+  expect(chimeAfter([main('running'), r('a', 'done')], 'a', 'done', true)).toBe('ding')
+  // The main agent finishes while a background subagent still runs: nothing yet.
+  expect(chimeAfter([main('done'), r('a', 'running')], MAIN_ID, 'done', true)).toBeNull()
+  // The last one to finish, main or subagent, chimes (and does not also ding).
+  expect(chimeAfter([main('done'), r('a', 'done')], 'a', 'done', true)).toBe('chime')
+  expect(chimeAfter([main('done'), r('a', 'done')], MAIN_ID, 'done', true)).toBe('chime')
+  // A failed subagent does not ding, but a failed last one still ends the work.
+  expect(chimeAfter([main('running'), r('a', 'failed')], 'a', 'failed', true)).toBeNull()
+  expect(chimeAfter([main('done'), r('a', 'failed')], 'a', 'failed', true)).toBe('chime')
+  // An end the person caused, or a repeated end, makes no sound.
+  expect(chimeAfter([main('done'), r('a', 'stopped')], 'a', 'stopped', true)).toBeNull()
+  expect(chimeAfter([main('done'), r('a', 'done')], 'a', 'done', false)).toBeNull()
+})
+
+// Starts a main turn, spawns subagents, and records every sound played.
+const sounds = (on: (event: string, hook: (...args: any[]) => unknown) => unknown) => {
+  const played: string[] = []
+
+  on('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
+  on('audio.play', (_: unknown, e: { clip: { asset?: string } }) => {
+    played.push(e.clip.asset ?? '?')
+
+    return { value: undefined }
+  })
+
+  return played
+}
+const settle = () => new Promise(done => setTimeout(done, 20))
+
+test('a ding when a subagent finishes, a chime when the main agent then does', async ($, on) => {
+  engine(on)
+  keepState(on)
+  const played = sounds(on)
+  await $.session.start(START)
+  await $.turn.start({ text: 'go', turnId: 'm' })
+  await spawn($, 'Scout the repo')
+
+  await end($, 'a1')
+  await settle()
+  expect(played).toEqual(['sounds/ding.wav'])
+
+  await $.turn.complete({ ...END, turnId: 'm', usage: USAGE })
+  await settle()
+  expect(played).toEqual(['sounds/ding.wav', 'sounds/chime.wav'])
+})
+
+test('a background subagent that outlives the main turn chimes when it ends', async ($, on) => {
+  engine(on)
+  keepState(on)
+  const played = sounds(on)
+  await $.session.start(START)
+  await $.turn.start({ text: 'go', turnId: 'm' })
+  await spawn($, 'Scout the repo')
+
+  await $.turn.complete({ ...END, turnId: 'm', usage: USAGE })
+  await settle()
+  expect(played).toEqual([])
+
+  await end($, 'a1')
+  await settle()
+  expect(played).toEqual(['sounds/chime.wav'])
+})
+
+test('the Chime button mutes the sounds for the session, and unmutes them', async ($, on) => {
+  engine(on)
+  keepState(on)
+  const played = sounds(on)
+  await $.session.start(START)
+  await $.turn.start({ text: 'go', turnId: 'm' })
+  await spawn($, 'Scout the repo')
+
+  expect((await inPane($, ui => ui.find({ type: 'Button', key: 'chime-toggle' })) as any)?.props.label).toBe('Chime: on')
+  await pressed($, 'chime-toggle')
+  expect((await inPane($, ui => ui.find({ type: 'Button', key: 'chime-toggle' })) as any)?.props.label).toBe('Chime: off')
+
+  await end($, 'a1')
+  await settle()
+  expect(played).toEqual([])
+
+  await pressed($, 'chime-toggle')
+  await $.turn.complete({ ...END, turnId: 'm', usage: USAGE })
+  await settle()
+  expect(played).toEqual(['sounds/chime.wav'])
+})
+
+test('with the chime off in /config nothing plays until the button turns it on', { options: { chime: false } }, async ($, on) => {
+  engine(on)
+  keepState(on)
+  const played = sounds(on)
+  await $.session.start(START)
+  await $.turn.start({ text: 'go', turnId: 'm' })
+  await spawn($, 'Scout the repo')
+
+  await end($, 'a1')
+  await $.turn.complete({ ...END, turnId: 'm', usage: USAGE })
+  await settle()
+  expect(played).toEqual([])
+  expect((await inPane($, ui => ui.find({ type: 'Button', key: 'chime-toggle' })) as any)?.props.label).toBe('Chime: off')
 })
 
 test('the cap drops finished rows first, and the tree helpers walk parents', () => {

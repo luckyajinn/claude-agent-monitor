@@ -47,6 +47,8 @@ declare module 'claude-code' {
       collapsed: boolean
       /** The pane's crab toggle: true for model skins, false for the classic crab, null to follow /config. */
       skins: boolean | null
+      /** The pane's chime toggle: true on, false muted, null to follow /config. */
+      chime: boolean | null
     }
   }
 }
