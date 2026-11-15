@@ -29,7 +29,7 @@ import {
   newMain,
   rooted,
   treeOf,
-  runningFor,
+  sessionTime,
   stopwatch,
   survivors,
   tokenTotal,
@@ -372,12 +372,17 @@ export const register: Register = (on, options) => {
       active === 0
         ? ''
         : `${active} still running ${active === 1 ? 'stays' : 'stay'}${parents > 0 ? `, with ${plural(parents, 'finished parent')}` : ''}`
-    // The one dollar figure the engine really keeps; it has none per agent.
+    // What the engine itself keeps for the whole session: its cost (it has
+    // none per agent) and when it began. Either may be missing.
     let session: number | undefined
+    let since: number | undefined
     try {
-      session = (await $.session.usage()).cost?.usd
+      const usage = await $.session.usage()
+      session = usage.cost?.usd
+      since = usage.startedAt
     } catch {
       session = undefined
+      since = undefined
     }
 
     const openTo = (row: AgentRow) => update($, path, () => [...trail, row.id])
@@ -629,7 +634,7 @@ export const register: Register = (on, options) => {
     const below = items.flatMap(item => (item.kind === 'row' ? [item.row] : []))
     const going = below.filter(row => row.status === 'running')
     const folded = (await read($, collapsed)) === true
-    const elapsed = runningFor(all, now)
+    const elapsed = sessionTime(all, now, since)
     // The colour key: each kind of work a running card on screen is doing.
     const root = current ?? main
     const inUse = workInUse([...(root === undefined ? [] : [root]), ...(folded ? [] : going)])
@@ -651,7 +656,7 @@ export const register: Register = (on, options) => {
           <Box gap={1} flexWrap="wrap">
             {tile(session === undefined ? 'Total Cost (est.)' : 'Total Cost', usd(session ?? total))}
             {tile('Total Tokens', tokens(tokenTotal(all)))}
-            {tile('Total time', stopwatch(elapsed ?? 0))}
+            {tile(elapsed.isEstimate ? 'Total time (est.)' : 'Total time', stopwatch(elapsed.ms))}
           </Box>
         )}
         {going.length === 0 ? null : (

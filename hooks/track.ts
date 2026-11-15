@@ -580,12 +580,23 @@ export const stopwatch = (ms: number): string => {
 export const tokenTotal = (rows: AgentRow[]): number =>
   rows.reduce((sum, row) => sum + row.inputTokens + row.cacheReadTokens + row.cacheWriteTokens + row.outputTokens, 0)
 
-// How long the agents going now have been at it: since the earliest of them
-// began. Null when none is running.
-export const runningFor = (rows: AgentRow[], now: number): number | null => {
-  const started = rows.filter(row => row.status === 'running').map(row => row.startedAt)
+// How long the session has run, for the Total time tile: since `startedAt`,
+// when the engine says the session began (the span its Total Cost covers).
+// When the engine cannot say, the earliest card in the pane stands in, a
+// finished one included, and `isEstimate` says so. A start ahead of the clock
+// reads 0.
+export const sessionTime = (
+  rows: AgentRow[],
+  now: number,
+  startedAt?: number,
+): { ms: number; isEstimate: boolean } => {
+  if (typeof startedAt === 'number' && Number.isFinite(startedAt)) {
+    return { ms: Math.max(0, now - startedAt), isEstimate: false }
+  }
+  // A row saved by an earlier version may have no start (0): leave it out.
+  const starts = rows.map(row => row.startedAt).filter(at => at > 0)
 
-  return started.length === 0 ? null : now - Math.min(...started)
+  return { ms: starts.length === 0 ? 0 : Math.max(0, now - Math.min(...starts)), isEstimate: true }
 }
 
 export const tokens = (n: number): string =>

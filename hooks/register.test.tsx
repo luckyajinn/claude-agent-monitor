@@ -29,7 +29,7 @@ import {
   progressOf,
   revive,
   rootsOf,
-  runningFor,
+  sessionTime,
   stopwatch,
   survivors,
   tokenTotal,
@@ -93,14 +93,14 @@ const END = {
 // ids in order, a step asks for a Grep, the clock stands still.
 const engine = (
   on: (event: string, hook: (...args: any[]) => unknown) => unknown,
-  more: { usage?: () => unknown; list?: () => unknown; model?: string } = {},
+  more: { usage?: () => unknown; list?: () => unknown; model?: string; clock?: () => number } = {},
   ids = ['a1', 'b1'],
 ) => {
   let next = 0
 
   on('command.register', () => ({ value: { command: 'agent-monitor' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
-  on('clock.now', () => ({ value: 1000 }))
+  on('clock.now', () => ({ value: more.clock?.() ?? 1000 }))
   on('session.usage', more.usage ?? (() => ({ value: { startedAt: 0, context: {}, rateLimits: [] } })))
   on('agent.list', more.list ?? (() => ({ value: [] })))
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
@@ -1091,20 +1091,97 @@ const keepState = (on: (event: string, hook: (...args: any[]) => unknown) => unk
 
 const START = { cwd: '/', surface: 'desktop', isInteractive: true } as const
 
-test('the stats helpers read a stopwatch, add every token and time the agents going', () => {
+test('the stats helpers read a stopwatch, add every token and time the session', () => {
   expect(stopwatch(47_000)).toBe('0:47')
   expect(stopwatch(725_000)).toBe('12:05')
   expect(stopwatch(3_729_000)).toBe('1:02:09')
   expect(stopwatch(-5)).toBe('0:00')
+  // A resumed session can run past a day: the hours keep counting.
+  expect(stopwatch(90_061_000)).toBe('25:01:01')
 
   const a = { ...newRow('a', 'x', 'Explore', MODEL, 100), inputTokens: 1, cacheReadTokens: 2, cacheWriteTokens: 3, outputTokens: 4 }
   const b = { ...newRow('b', 'y', 'Explore', MODEL, 400), outputTokens: 10 }
-  const c = { ...newRow('c', 'z', 'Explore', MODEL, 0), status: 'done' as const }
+  const c = { ...newRow('c', 'z', 'Explore', MODEL, 20), status: 'done' as const }
   expect(tokenTotal([a, b, c])).toBe(20)
-  // The earliest running agent sets the time; a finished one does not count.
-  expect(runningFor([a, b, c], 1000)).toBe(900)
-  expect(runningFor([c], 1000)).toBeNull()
-  expect(runningFor([], 1000)).toBeNull()
+  // The session's own start sets the time, whatever the cards say.
+  expect(sessionTime([a, b, c], 1000, 50)).toEqual({ ms: 950, isEstimate: false })
+  expect(sessionTime([c], 1000, 50)).toEqual({ ms: 950, isEstimate: false })
+  expect(sessionTime([], 1000, 1000 - 9_000_000)).toEqual({ ms: 9_000_000, isEstimate: false })
+  expect(stopwatch(sessionTime([], 1000, 1000 - 9_000_000).ms)).toBe('2:30:00')
+  expect(sessionTime([a], 1000, 5000)).toEqual({ ms: 0, isEstimate: false })
+  // With no start from the engine, the earliest card stands in, a finished
+  // one included; a row with no start of its own is left out.
+  expect(sessionTime([a, b, c], 1000)).toEqual({ ms: 980, isEstimate: true })
+  expect(sessionTime([a, b], 1000, Number.NaN)).toEqual({ ms: 900, isEstimate: true })
+  expect(sessionTime([fill({ id: 'old' })], 1000)).toEqual({ ms: 0, isEstimate: true })
+  expect(sessionTime([], 1000)).toEqual({ ms: 0, isEstimate: true })
+})
+
+test('Total time counts from the session start, not from the oldest agent still running', async ($, on) => {
+  // The case reported: a session 2.5 hours old whose earlier work finished
+  // and cleared at a prompt, with two agents running for the last 27 minutes.
+  const began = 1_000_000
+  let t = began
+  engine(
+    on,
+    {
+      usage: () => ({ value: { startedAt: began, context: {}, rateLimits: [], cost: { usd: 112.18 } } }),
+      clock: () => t,
+    },
+    ['a1', 'b1', 'c1'],
+  )
+  keepState(on)
+
+  await $.session.start(START)
+  await spawn($, 'Feature: entries screens')
+  t = began + 3_600_000
+  await end($, 'a1')
+  await $.prompt.submit({ text: 'now fix what the reviews found', origin: { kind: 'composer' } })
+  t = began + 9_000_000 - 1_623_000
+  await spawn($, 'Fix: core and ledger findings')
+  await spawn($, 'Fix: accounts security findings')
+  t = began + 9_000_000
+
+  await inPane($, async ui => {
+    expect(await shows(ui, /^Total time$/)).toBe(true)
+    expect(await shows(ui, /^2:30:00$/)).toBe(true)
+    expect(await shows(ui, /^27:03$/)).toBe(false)
+    // Each card still times its own agent.
+    expect(await shows(ui, /27m 3s/)).toBe(true)
+  })
+})
+
+test('when the engine cannot say when the session began, Total time is an estimate from the earliest card', async ($, on) => {
+  let t = 10_000
+  let usage: () => unknown = () => {
+    throw new Error('no usage')
+  }
+  engine(on, { usage: () => usage(), clock: () => t }, ['a1', 'b1'])
+  keepState(on)
+
+  await $.session.start(START)
+  await spawn($, 'Scout the repo')
+  t = 40_000
+  await end($, 'a1')
+  t = 70_000
+  await spawn($, 'Write the tests')
+  t = 100_000
+
+  // No figures at all: both tiles are the mod's own, and say so. The finished
+  // card counts: 90 seconds, not the 30 of the agent still running.
+  await inPane($, async ui => {
+    expect(await shows(ui, /^Total Cost \(est\.\)$/)).toBe(true)
+    expect(await shows(ui, /^Total time \(est\.\)$/)).toBe(true)
+    expect(await shows(ui, /^1:30$/)).toBe(true)
+  })
+
+  // A cost but no start: only the time is an estimate.
+  usage = () => ({ value: { context: {}, rateLimits: [], cost: { usd: 3.5 } } })
+  await inPane($, async ui => {
+    expect(await shows(ui, /^Total Cost$/)).toBe(true)
+    expect(await shows(ui, /^Total time \(est\.\)$/)).toBe(true)
+    expect(await shows(ui, /^1:30$/)).toBe(true)
+  })
 })
 
 test('while agents run, a stats row sits above them and a Running bar folds their cards', async ($, on) => {
@@ -1122,6 +1199,8 @@ test('while agents run, a stats row sits above them and a Running bar folds thei
     expect(await shows(ui, /\$2\.38/)).toBe(true)
     expect(await shows(ui, /^Total Tokens$/)).toBe(true)
     expect(await shows(ui, /^Total time$/)).toBe(true)
+    // The session began at 0 and the clock stands at 1000; every card began at 1000.
+    expect(await shows(ui, /^0:01$/)).toBe(true)
     expect((await ui.find({ type: 'Button', key: 'running-toggle' }))?.props.label).toBe('▾ Running · 2')
     expect(await shows(ui, /Scout the repo/)).toBe(true)
   })
