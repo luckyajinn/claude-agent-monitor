@@ -28,6 +28,7 @@ The mod's one-line summary sits above whatever another plugin draws above the pr
 
 ## Using the pane
 
+- **The pane opens when a prompt starts its first subagent.** If you closed it, the next prompt that starts a subagent brings it back. If you close it in the middle of a prompt, it stays closed until your next one. The main agent working alone does not open it. Claude Code only draws a pane that opens by itself when the window is wide enough: 144 columns, or 110 once you have opened it yourself. In a narrower window it waits until the window is widened. `/agent-monitor` opens it at any width.
 - **A stats row and a Running bar sit above the cards while any agent is running.** Three tiles show Total Cost (the session figure the engine keeps; when it can't be read the tile says "Total Cost (est.)" and shows the mod's own estimate), Total Tokens (input, cache and output, for the main agent and every subagent in the pane, so cards already cleared no longer count) and Total time (how long the session has run, from the same start as Total Cost, as `m:ss` or `h:mm:ss`; a resumed session counts from its first launch and `/clear` starts it over; when the engine can't say when the session began, the tile says "Total time (est.)" and counts from the earliest card in the pane). A green `▾ Running · N` bar (N is the running subagents) sits above the tree; click it to fold the subagents away under the main agent (`▸`) and again to show them. Both disappear when nothing is running.
 - **A running card is coloured by the kind of work it is doing**, so agents doing similar work share a colour: research (cyan), web research (blue), writing (magenta), verifying (lime), commands (orange), delegating (violet) and other work (gray). The colour marks the card's status icon, its activity line, its progress bar and the line above the prompt, and a colour key lists the kinds on screen now. A finished card keeps its outcome colour (done green, failed red, stopped yellow). The activity stays written on every card, so nothing depends on colour alone.
 - **The main agent is tracked too, at the root of a tree.** "Main Claude Agent" gets its own card (model, steps, tokens, cost, what it is doing) for the current prompt, and every subagent hangs beneath it with tree connectors (`├──`, `└──`, `│`); a subagent's own subagents hang one step further in. On the desktop the connectors are drawn as unbroken lines down the side of each card; in a terminal they are text. Siblings are listed in the order they started.
@@ -57,7 +58,7 @@ claude plugin install agent-monitor --marketplace luckyajinn/claude-agent-monito
 
 In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `luckyajinn/claude-agent-monitor`, then Add plugin.
 
-When asked `Add marketplace?`, answer `y`, then pick a scope. The pane opens by itself the first time a subagent starts, and `/agent-monitor` opens it any time.
+When asked `Add marketplace?`, answer `y`, then pick a scope. The pane opens by itself when a prompt starts its first subagent, and `/agent-monitor` opens it any time.
 
 ## What is real and what is estimated
 

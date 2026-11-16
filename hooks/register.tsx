@@ -176,7 +176,11 @@ export const register: Register = (on, options) => {
   // The same for the completion chime: on unless set off in /config.
   const chimeByDefault = options?.chime !== false
   const chimeOn = (value: unknown) => (typeof value === 'boolean' ? value : chimeByDefault)
-  let isShown = false
+  // Whether this prompt's first subagent has already brought the pane back.
+  // A new prompt from the person sets it false again, so a pane closed (or
+  // never drawn) comes back with the next prompt's subagents, but a pane closed
+  // mid-prompt stays closed until then.
+  let hasOpenedThisPrompt = false
   // The task an agent was given and its final report are free text: they stay
   // in this module, not in `$.state`, which any plugin in the session can read.
   // A reload of the mod forgets them; the pane then says so.
@@ -208,6 +212,7 @@ export const register: Register = (on, options) => {
     const isPerson = e.origin?.kind === 'composer' || e.origin?.kind === 'bridge'
 
     if (isPerson && e.command === undefined) {
+      hasOpenedThisPrompt = false
       try {
         const isKept = keptAtPrompt(await goingIds($))
         // A finished parent with one of these beneath it stays, so a running
@@ -222,7 +227,8 @@ export const register: Register = (on, options) => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  // A subagent is born: add its card and show the pane the first time.
+  // A subagent is born: add its card, and with a prompt's first one bring the
+  // pane back if it is not open.
   on('agent.spawn', async ($, e, next) => {
     const started = await next(e)
 
@@ -249,9 +255,16 @@ export const register: Register = (on, options) => {
             )
           : capRows([...list, row], MAX_ROWS),
       )
-      if (!isShown) {
-        isShown = true
-        void $.ui.open({ id: PANE, title: TITLE })
+      if (!hasOpenedThisPrompt) {
+        hasOpenedThisPrompt = true
+        // One already open, drawn or waiting for a wider window, is left as it
+        // is. The engine draws an unasked pane only on a wide enough window;
+        // `/agent-monitor` opens it at any width.
+        const panes = await $.ui.panes().catch(() => [])
+        const isOpen = panes.some(pane => pane.id === PANE)
+        if (!isOpen) {
+          void $.ui.open({ id: PANE, title: TITLE })
+        }
       }
     } catch {
       // The card is lost, the agent is not.

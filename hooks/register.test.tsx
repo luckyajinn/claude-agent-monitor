@@ -93,13 +93,27 @@ const END = {
 // ids in order, a step asks for a Grep, the clock stands still.
 const engine = (
   on: (event: string, hook: (...args: any[]) => unknown) => unknown,
-  more: { usage?: () => unknown; list?: () => unknown; model?: string; clock?: () => number } = {},
+  more: {
+    usage?: () => unknown
+    list?: () => unknown
+    model?: string
+    clock?: () => number
+    panes?: () => { id: string }[]
+    opened?: string[]
+  } = {},
   ids = ['a1', 'b1'],
 ) => {
   let next = 0
 
   on('command.register', () => ({ value: { command: 'agent-monitor' } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.open', (_: unknown, e: { id: string }) => {
+    more.opened?.push(e.id)
+
+    return { value: { isPlaced: true } }
+  })
+  on('ui.panes', () => ({
+    value: (more.panes?.() ?? []).map(pane => ({ title: 'Agents', isShown: true, isFocused: false, isPlaced: true, ...pane })),
+  }))
   on('clock.now', () => ({ value: more.clock?.() ?? 1000 }))
   on('session.usage', more.usage ?? (() => ({ value: { startedAt: 0, context: {}, rateLimits: [] } })))
   on('agent.list', more.list ?? (() => ({ value: [] })))
@@ -912,6 +926,50 @@ test('a new prompt clears finished work; other submissions do not', async ($, on
   // The person's own prompt starts the pane over.
   await $.prompt.submit({ text: 'next question', origin: { kind: 'composer' } })
   expect(await shown()).toBe(false)
+})
+
+test('each prompt\'s first subagent brings the pane back unless it is open', async ($, on) => {
+  const opened: string[] = []
+  let panes: { id: string }[] = []
+  engine(on, { opened, panes: () => panes }, ['a1', 'b1', 'c1', 'd1'])
+  on('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
+  const prompt = (text: string) => $.prompt.submit({ text, origin: { kind: 'composer' } })
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  // The main agent working alone opens nothing.
+  await prompt('just answer')
+  await $.turn.start({ turnId: 'm1', text: 'just answer' })
+  expect(opened).toEqual([])
+
+  // The first subagent opens the pane; a second in the same prompt does not.
+  await prompt('scout it')
+  await $.agent.spawn(SPAWN)
+  await $.agent.spawn({ ...SPAWN, tool_use_id: 't2' })
+  expect(opened).toEqual(['agent-monitor'])
+
+  // The person closed it: the next prompt's first subagent brings it back.
+  await prompt('again')
+  await $.agent.spawn({ ...SPAWN, tool_use_id: 't3' })
+  expect(opened).toEqual(['agent-monitor', 'agent-monitor'])
+
+  // Still open (or waiting for a wider window): it is left as it is.
+  panes = [{ id: 'agent-monitor' }]
+  await prompt('and again')
+  await $.agent.spawn({ ...SPAWN, tool_use_id: 't4' })
+  expect(opened).toEqual(['agent-monitor', 'agent-monitor'])
+})
+
+test('a slash command or notification does not rearm the pane', async ($, on) => {
+  const opened: string[] = []
+  engine(on, { opened }, ['a1', 'b1', 'c1'])
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.agent.spawn(SPAWN)
+  await $.prompt.submit({ text: 'a task finished', origin: { kind: 'notification' } })
+  await $.prompt.submit({ text: '/agent-monitor', command: { name: 'agent-monitor', args: '' }, origin: { kind: 'composer' } })
+  await $.agent.spawn({ ...SPAWN, tool_use_id: 't2' })
+  expect(opened).toEqual(['agent-monitor'])
 })
 
 test('a card the engine no longer lists as going is dropped at the next prompt', async ($, on) => {
