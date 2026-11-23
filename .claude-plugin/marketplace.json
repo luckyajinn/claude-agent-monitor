@@ -1,7 +1,7 @@
 {
   "name": "claude-agent-monitor",
-  "description": "Claude Code mods by luckyajinnITsolutions.",
-  "owner": { "name": "luckyajinnITsolutions" },
+  "description": "Claude Code mods by CJ.",
+  "owner": { "name": "CJ" },
   "plugins": [
     {
       "name": "agent-monitor",

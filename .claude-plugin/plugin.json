@@ -2,7 +2,7 @@
   "name": "agent-monitor",
   "version": "1.2.0",
   "description": "A live pane that tracks the main agent and every subagent as a tree: model, estimated progress and time left, estimated cost and what each is doing right now.",
-  "author": { "name": "luckyajinnITsolutions" },
+  "author": { "name": "CJ" },
   "homepage": "https://github.com/luckyajinn/claude-agent-monitor",
   "repository": "https://github.com/luckyajinn/claude-agent-monitor",
   "license": "MIT",
