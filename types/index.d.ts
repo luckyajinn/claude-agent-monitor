@@ -49,6 +49,8 @@ declare module 'claude-code' {
       skins: boolean | null
       /** The pane's chime toggle: true on, false muted, null to follow /config. */
       chime: boolean | null
+      /** The pane's job backgrounds toggle: true on, false off, null to follow /config. */
+      scenes: boolean | null
     }
   }
 }

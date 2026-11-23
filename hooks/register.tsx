@@ -3,6 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentRow, AgentStatus } from '../types'
 import { barSvg, crabAlt, crabSvg, crabText, WIRE_STEP, wireSvg } from './crab'
+import { SCENE_H, SCENE_W, sceneAlt, sceneOf, sceneSvg } from './scenes'
 import {
   addUsage,
   applyStep,
@@ -56,6 +57,16 @@ const skins = atom({ plugin: 'agent-monitor', key: 'skins' } as const, null)
 // The pane's chime toggle for this session: true on, false muted, null to
 // follow the `chime` setting in /config.
 const chime = atom({ plugin: 'agent-monitor', key: 'chime' } as const, null)
+// The pane's job backgrounds toggle for this session: true on, false off,
+// null to follow the `jobBackgrounds` setting in /config.
+const scenes = atom({ plugin: 'agent-monitor', key: 'scenes' } as const, null)
+
+// A card's scene is as tall as the crab alone was, and keeps the scene's shape.
+const SCENE_HEIGHT = 32
+const SCENE_WIDTH = Math.round((SCENE_HEIGHT * SCENE_W) / SCENE_H)
+// The wider banner at the top of an opened agent.
+const BANNER_HEIGHT = 45
+const BANNER_WIDTH = Math.round((BANNER_HEIGHT * SCENE_W) / SCENE_H)
 
 const COLORS: Record<AgentStatus, string> = {
   running: 'cyan',
@@ -176,6 +187,9 @@ export const register: Register = (on, options) => {
   // The same for the completion chime: on unless set off in /config.
   const chimeByDefault = options?.chime !== false
   const chimeOn = (value: unknown) => (typeof value === 'boolean' ? value : chimeByDefault)
+  // And for the job backgrounds: on unless set off in /config.
+  const scenesByDefault = options?.jobBackgrounds !== false
+  const scenesOn = (value: unknown) => (typeof value === 'boolean' ? value : scenesByDefault)
   // Whether this prompt's first subagent has already brought the pane back.
   // A new prompt from the person sets it false again, so a pane closed (or
   // never drawn) comes back with the next prompt's subagents, but a pane closed
@@ -405,6 +419,27 @@ export const register: Register = (on, options) => {
     const skinned = skinsOn(await read($, skins))
     const skinOf = (row: AgentRow) => (skinned ? row.model : '')
     const chiming = chimeOn(await read($, chime))
+    // With the backgrounds off, each card shows the crab alone, as before 1.2.0.
+    const staged = scenesOn(await read($, scenes))
+    // A card's picture: the crab in the scene for its job, or the crab alone.
+    const picture = (row: AgentRow, isBanner = false) =>
+      staged ? (
+        <Svg
+          source={sceneSvg(sceneOf(row), row.status, skinOf(row))}
+          alt={sceneAlt(sceneOf(row), row.status, skinOf(row))}
+          width={isBanner && !isNarrow ? BANNER_WIDTH : SCENE_WIDTH}
+          height={isBanner && !isNarrow ? BANNER_HEIGHT : SCENE_HEIGHT}
+          isInteractive={row.status === 'running'}
+        />
+      ) : (
+        <Svg
+          source={crabSvg(row.status, skinOf(row))}
+          alt={crabAlt(row.status, skinOf(row))}
+          width={48}
+          height={32}
+          isInteractive={row.status === 'running'}
+        />
+      )
 
     // The tree's connectors. Where pictures draw, a picture `height` pixels
     // tall, so a line meets the next one with no gap between rows. In the
@@ -437,7 +472,16 @@ export const register: Register = (on, options) => {
           <Text color={color}>{ICONS[row.status]}</Text> {trunc(row.name, nameMax)}
         </Text>
       )
-      const activity = <Text color={color}>{row.activity}</Text>
+      // In the terminal, where no scene can be drawn, a running card's job
+      // shows as a tinted label instead.
+      const activity =
+        !hasSvg && staged && row.status === 'running' ? (
+          <Box backgroundColor={color} paddingX={1}>
+            <Text color="black">{row.activity}</Text>
+          </Box>
+        ) : (
+          <Text color={color}>{row.activity}</Text>
+        )
       // Each row's picture is at least as tall as what it holds, so the rows,
       // and the lines down their left, sit edge to edge.
       const ROW_HEIGHT: Record<string, number> = { title: 24, crab: 34, gap: 8 }
@@ -504,17 +548,7 @@ export const register: Register = (on, options) => {
             'crab',
             body,
             <Box gap={1} alignItems="center">
-              {!hasSvg ? (
-                <Text color="red">{crabText(skinOf(row))}</Text>
-              ) : (
-                <Svg
-                  source={crabSvg(row.status, skinOf(row))}
-                  alt={crabAlt(row.status, skinOf(row))}
-                  width={48}
-                  height={32}
-                  isInteractive={row.status === 'running'}
-                />
-              )}
+              {!hasSvg ? <Text color="red">{crabText(skinOf(row))}</Text> : picture(row)}
               <Text dimColor>{trunc(row.detail, isNarrow ? 22 : 40)}</Text>
             </Box>,
           )}
@@ -542,18 +576,9 @@ export const register: Register = (on, options) => {
 
       return (
         <Box key={`detail-${row.id}`} flexDirection="column" gap={1} borderStyle="round" borderColor={color} paddingX={1}>
+          {hasSvg && staged ? picture(row, true) : null}
           <Box gap={1} alignItems="center">
-            {!hasSvg ? (
-              <Text color="red">{crabText(skinOf(row))}</Text>
-            ) : (
-              <Svg
-                source={crabSvg(row.status, skinOf(row))}
-                alt={crabAlt(row.status, skinOf(row))}
-                width={48}
-                height={32}
-                isInteractive={row.status === 'running'}
-              />
-            )}
+            {!hasSvg ? <Text color="red">{crabText(skinOf(row))}</Text> : staged ? null : picture(row)}
             <Box flexDirection="column">
               <Text weight="bold">
                 {ICONS[row.status]} {trunc(row.name, nameMax)}
@@ -701,6 +726,12 @@ export const register: Register = (on, options) => {
             plain
             label={chiming ? 'Chime: on' : 'Chime: off'}
             onPress={() => update($, chime, value => !chimeOn(value))}
+          />
+          <Button
+            key="scenes-toggle"
+            plain
+            label={staged ? 'Backgrounds: on' : 'Backgrounds: off'}
+            onPress={() => update($, scenes, value => !scenesOn(value))}
           />
         </Box>
         {trail.length > 0 && (

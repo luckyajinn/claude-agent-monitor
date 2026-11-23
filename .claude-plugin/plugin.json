@@ -1,6 +1,6 @@
 {
   "name": "agent-monitor",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "description": "A live pane that tracks the main agent and every subagent as a tree: model, estimated progress and time left, estimated cost and what each is doing right now.",
   "author": { "name": "luckyajinnITsolutions" },
   "homepage": "https://github.com/luckyajinn/claude-agent-monitor",
@@ -18,6 +18,12 @@
       "type": "boolean",
       "title": "Completion chime",
       "description": "A soft ding when a subagent finishes its task, and a fuller chime once the main agent and every subagent are done. The pane's Chime button mutes or unmutes it for the current session. Plays in the desktop app and on macOS; a Windows or Linux terminal has no player and stays quiet.",
+      "default": true
+    },
+    "jobBackgrounds": {
+      "type": "boolean",
+      "title": "Job backgrounds",
+      "description": "Put each agent's crab in a small pixel scene for the job it is doing now: a library for research, a night sky for the web, a desk for writing, a lab bench for verifying, a terminal for commands, a signpost for delegating. In a terminal the job shows as a tinted label instead. The pane's Backgrounds button switches it for the current session.",
       "default": true
     }
   }

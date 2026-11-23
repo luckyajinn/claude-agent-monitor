@@ -1,6 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 
 import { crabAlt, crabSvg, crabText, lookOf, wireSvg } from './crab'
+import { SCENE_PLACES, sceneAlt, sceneOf, sceneSvg } from './scenes'
+import type { SceneKind } from './scenes'
 
 import {
   applyStep,
@@ -327,10 +329,14 @@ test('agents doing similar work share a colour, and the key names what is on scr
   expect(await ui.find({ type: 'Text', text: /Colour key/ })).toBeDefined()
   await ui.unmount()
 
-  // The terminal draws the same colours by name.
+  // The terminal draws the same colours by name, as the tint behind each
+  // running card's job label (the Running bar's green aside).
   const term = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await colors(term, /^Researching$/)).toEqual([workColors.research.color, workColors.research.color])
-  expect(await colors(term, /^Writing$/)).toEqual([workColors.write.color])
+  const tints = (await term.findAll({ type: 'Box' }))
+    .map((found: any) => found.props.backgroundColor)
+    .filter((tint: unknown) => tint !== undefined && tint !== 'green')
+  expect(tints).toEqual([workColors.research.color, workColors.research.color, workColors.write.color])
+  expect(await colors(term, /^Researching$/)).toEqual(['black', 'black'])
   await term.unmount()
 
   // The band takes the latest running agent's colour.
@@ -494,11 +500,11 @@ test('the Crab button switches between the model skins and the classic crab', as
       surface,
     )
 
-  // Skins by default: the Sonnet crab.
-  expect(await crab()).toEqual({ label: 'Crab: model skins', alt: 'Sonnet crab, running' })
+  // Skins by default: the Sonnet crab, on the beach until its first step.
+  expect(await crab()).toEqual({ label: 'Crab: model skins', alt: 'Sonnet crab, running, on the beach' })
 
   await pressed($, 'skins-toggle')
-  expect(await crab()).toEqual({ label: 'Crab: classic', alt: 'Crab, running' })
+  expect(await crab()).toEqual({ label: 'Crab: classic', alt: 'Crab, running, on the beach' })
   await inPane(
     $,
     async ui => {
@@ -508,7 +514,7 @@ test('the Crab button switches between the model skins and the classic crab', as
   )
 
   await pressed($, 'skins-toggle')
-  expect(await crab()).toEqual({ label: 'Crab: model skins', alt: 'Sonnet crab, running' })
+  expect(await crab()).toEqual({ label: 'Crab: model skins', alt: 'Sonnet crab, running, on the beach' })
 })
 
 test('with crabSkins off in /config the classic crab is the default, and the button still switches', { options: { crabSkins: false } }, async ($, on) => {
@@ -520,9 +526,9 @@ test('with crabSkins off in /config the classic crab is the default, and the but
   const alt = () =>
     inPane($, async ui => (await ui.findAll({ type: 'Svg' })).find((one: any) => /crab/i.test(one.props.alt))?.props.alt)
 
-  expect(await alt()).toBe('Crab, running')
+  expect(await alt()).toBe('Crab, running, on the beach')
   await pressed($, 'skins-toggle')
-  expect(await alt()).toBe('Sonnet crab, running')
+  expect(await alt()).toBe('Sonnet crab, running, on the beach')
 })
 
 test('a subagent done dings, and everything done chimes once', () => {
@@ -1939,7 +1945,7 @@ for (const [model, name, text, body] of FAMILIES) {
     await $.agent.spawn(SPAWN)
     let ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
     const crab = await crabOf(ui)
-    expect(crab?.props.alt).toBe(`${name} crab, running`)
+    expect(crab?.props.alt).toBe(`${name} crab, running, on the beach`)
     expect(crab?.props.source).toContain(body)
     await ui.unmount()
 
@@ -1958,14 +1964,15 @@ test('the crab follows the model the agent is using now', async ($, on) => {
   await $.session.start(START)
   await $.agent.spawn(SPAWN)
   let ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await crabOf(ui))?.props.alt).toBe('Opus crab, running')
+  expect((await crabOf(ui))?.props.alt).toBe('Opus crab, running, on the beach')
   await ui.unmount()
 
   for await (const _chunk of $.turn.step({ ...STEP, agentId: 'a1' })) {
     // Only the step's model matters here.
   }
   ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await crabOf(ui))?.props.alt).toBe('Sonnet crab, running')
+  // The step asked for a Grep, so the crab has moved to the library too.
+  expect((await crabOf(ui))?.props.alt).toBe('Sonnet crab, running, in the library')
   await ui.unmount()
 })
 
@@ -1975,7 +1982,152 @@ test('an unknown model keeps the default crab', async ($, on) => {
   await $.session.start(START)
   await $.agent.spawn(SPAWN)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await crabOf(ui))?.props.alt).toBe('Crab, running')
+  expect((await crabOf(ui))?.props.alt).toBe('Crab, running, on the beach')
   expect((await crabOf(ui))?.props.source).toContain('#F35B46')
   await ui.unmount()
+})
+
+// Job backgrounds (1.2.0): each card's crab stands in a scene for its job.
+
+const SCENE_KINDS: SceneKind[] = ['research', 'web', 'write', 'verify', 'commands', 'delegate', 'other', 'done']
+
+test('a running agent is in the scene for the work it is doing now', () => {
+  const at = (activity: string) => sceneOf({ status: 'running', activity, log: [] })
+
+  expect(at('Researching')).toBe('research')
+  expect(at('Researching the web')).toBe('web')
+  expect(at('Writing')).toBe('write')
+  expect(at('Verifying')).toBe('verify')
+  expect(at('Running commands')).toBe('commands')
+  expect(at('Delegating')).toBe('delegate')
+  expect(at('Starting')).toBe('other')
+  expect(at('Using a connector')).toBe('other')
+})
+
+test('a finished agent goes to the sunset; a failed or stopped one stays where its last real work was', () => {
+  const log = ['1. Researching · Read track.ts', '2. Verifying · npm test (+1)', '3. Using a connector · mcp__x__y']
+
+  expect(sceneOf({ status: 'done', activity: 'Done', log })).toBe('done')
+  // The connector step is other work, so the lab bench before it is where it failed.
+  expect(sceneOf({ status: 'failed', activity: 'Failed', log })).toBe('verify')
+  expect(sceneOf({ status: 'stopped', activity: 'Stopped', log: ['1. Running commands (+2)'] })).toBe('commands')
+  // Writing the report is writing, as the colour key has it.
+  expect(sceneOf({ status: 'failed', activity: 'Failed', log: ['1. Writing report'] })).toBe('write')
+  expect(sceneOf({ status: 'stopped', activity: 'Stopped', log: [] })).toBe('other')
+})
+
+test('every scene is its own picture, with the crab standing in it', () => {
+  const drawn = new Set<string>()
+
+  for (const kind of SCENE_KINDS) {
+    const status = kind === 'done' ? 'done' : 'running'
+    const svg = sceneSvg(kind, status, 'claude-opus-5-5')
+
+    expect(svg.startsWith('<svg ')).toBe(true)
+    expect(svg).toContain('viewBox="0 0 64 10"')
+    // One picture: the crab's own <svg> wrapper is gone, its body is not.
+    expect(svg.split('<svg').length).toBe(2)
+    expect(svg).toContain('#9B5DE5')
+    // Small: about the size of a sprite, not an image.
+    expect(svg.length).toBeLessThan(8000)
+    drawn.add(svg)
+  }
+  expect(drawn.size).toBe(SCENE_KINDS.length)
+})
+
+test('a scene moves only while its agent works, and a failed or stopped one is faded in its outcome colour', () => {
+  expect(sceneSvg('web', 'running')).toContain('<animate')
+  expect(sceneSvg('done', 'done')).not.toContain('<animate')
+  expect(sceneSvg('verify', 'failed')).not.toContain('<animate')
+  expect(sceneSvg('verify', 'failed')).toContain('#dc2626')
+  expect(sceneSvg('commands', 'stopped')).toContain('#ca8a04')
+  expect(sceneSvg('commands', 'stopped')).toContain('opacity="0.45"')
+  expect(sceneSvg('research', 'running')).not.toContain('#dc2626')
+})
+
+test('the scene says where the crab is', () => {
+  expect(sceneAlt('research', 'running', 'claude-sonnet-5-5')).toBe('Sonnet crab, running, in the library')
+  expect(sceneAlt('done', 'done')).toBe('Crab, done, on the beach at sunset')
+  expect(Object.keys(SCENE_PLACES).sort()).toEqual([...SCENE_KINDS].sort())
+})
+
+const pictureOf = async (ui: any) =>
+  ((await ui.findAll({ type: 'Svg' })) as any[]).find(svg => / crab, |^Crab, /.test(svg.props.alt))
+
+test('a card shows its job as a scene, and the Backgrounds button puts the crab back on its own', async ($, on) => {
+  engine(on)
+  keepState(on)
+  await $.session.start(START)
+  await $.agent.spawn(SPAWN)
+  for await (const _chunk of $.turn.step({ ...STEP, agentId: 'a1' })) {
+    // The step asks for a Grep: research.
+  }
+
+  const look = () =>
+    inPane($, async ui => {
+      const button = await ui.find({ type: 'Button', key: 'scenes-toggle' })
+      const svg = await pictureOf(ui)
+
+      return { label: button?.props.label, alt: svg?.props.alt, width: svg?.props.width, height: svg?.props.height }
+    })
+
+  expect(await look()).toEqual({ label: 'Backgrounds: on', alt: 'Sonnet crab, running, in the library', width: 205, height: 32 })
+  await pressed($, 'scenes-toggle')
+  expect(await look()).toEqual({ label: 'Backgrounds: off', alt: 'Sonnet crab, running', width: 48, height: 32 })
+  await pressed($, 'scenes-toggle')
+  expect(((await look()) as { label?: string }).label).toBe('Backgrounds: on')
+})
+
+test('with jobBackgrounds off in /config the crab stands alone, and the button still switches', { options: { jobBackgrounds: false } }, async ($, on) => {
+  engine(on)
+  keepState(on)
+  await $.session.start(START)
+  await spawn($, 'Scout the repo')
+
+  const alt = () => inPane($, async ui => (await pictureOf(ui))?.props.alt)
+
+  expect(await alt()).toBe('Sonnet crab, running')
+  await pressed($, 'scenes-toggle')
+  expect(await alt()).toBe('Sonnet crab, running, on the beach')
+})
+
+test('the terminal tints a running card job label, and leaves it plain with the backgrounds off', async ($, on) => {
+  engine(on)
+  keepState(on)
+  await $.session.start({ ...START, surface: 'terminal' })
+  await $.agent.spawn(SPAWN)
+  for await (const _chunk of $.turn.step({ ...STEP, agentId: 'a1' })) {
+    // Research.
+  }
+  const label = () =>
+    inPane(
+      $,
+      async ui => {
+        const tint = (await ui.findAll({ type: 'Box' }))
+          .map((found: any) => found.props.backgroundColor)
+          .filter((one: unknown) => one !== undefined && one !== 'green')
+        const text = await ui.find({ type: 'Text', text: /^Researching$/ })
+
+        return { tint, color: text?.props.color }
+      },
+      'terminal',
+    )
+
+  expect(await label()).toEqual({ tint: ['cyan'], color: 'black' })
+  await pressed($, 'scenes-toggle', 'terminal')
+  expect(await label()).toEqual({ tint: [], color: 'cyan' })
+})
+
+test('an opened agent shows its scene as a wide banner', async ($, on) => {
+  engine(on)
+  keepState(on)
+  await $.session.start(START)
+  await $.agent.spawn(SPAWN)
+  await pressed($, 'open-a1')
+
+  const banner: any = await inPane($, async ui =>
+    ((await ui.findAll({ type: 'Svg' })) as any[]).find(svg => / crab, /.test(svg.props.alt) && svg.props.width === 288),
+  )
+  expect(banner?.props.height).toBe(45)
+  expect(banner?.props.alt).toBe('Sonnet crab, running, on the beach')
 })
