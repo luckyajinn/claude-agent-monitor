@@ -13,6 +13,9 @@ import type { WorkKind } from './track'
 // place the model looks expect (x 1.5 to 16.5 with its accessory).
 export const SCENE_W = 64
 export const SCENE_H = 10
+// A narrow pane shows only the left part of the scene: the crab and the props
+// nearest it, at the same scale, so the card does not grow wider.
+export const SCENE_NARROW_W = 40
 
 export type SceneKind = WorkKind | 'done'
 
@@ -255,14 +258,14 @@ const other = (live: Anim): string => {
 }
 
 const done = (): string =>
-  R(0, 0, 64, 3, '#14532d') +
-  R(0, 3, 64, 2, '#166534') +
-  R(0, 5, 64, 2, '#15803d') +
+  R(0, 0, 64, 3, '#4c1d95') +
+  R(0, 3, 64, 2, '#9d174d') +
+  R(0, 5, 64, 2, '#ea580c') +
   // The sun going down over the sea.
   R(45, 3, 6, 1, '#fde68a') +
   R(44, 4, 8, 3, '#fcd34d') +
   R(46, 2.5, 4, 0.5, '#fef3c7') +
-  R(0, 7, 64, 1, '#14532d') +
+  R(0, 7, 64, 1, '#1e3a8a') +
   R(40, 7, 16, 0.4, '#fcd34d', ' opacity="0.6"') +
   R(0, 8, 64, 2, '#d6c7a1') +
   // A green flag planted in the sand, and a shell.
@@ -320,10 +323,10 @@ const crabInScene = (status: AgentStatus, model: string): string => {
   return `<g transform="translate(3 2)"${faded ? ' opacity="0.45"' : ''}>${inner}</g>`
 }
 
-// The whole picture for a card: the scene with the crab in it. Animated only
-// while the agent works. A failed or stopped scene is greyed and washed red
+// The whole picture for a card: the scene with the crab in it, `width` sprite
+// pixels of it from the left. Animated only while the agent works. A failed or stopped scene is greyed and washed red
 // or yellow, the outcome colours the card already uses.
-export const sceneSvg = (kind: SceneKind, status: AgentStatus, model = ''): string => {
+export const sceneSvg = (kind: SceneKind, status: AgentStatus, model = '', width = SCENE_W): string => {
   const isLive = status === 'running'
   const live: Anim = svg => (isLive ? svg : '')
   const art = SCENES[kind](live)
@@ -334,7 +337,7 @@ export const sceneSvg = (kind: SceneKind, status: AgentStatus, model = ''): stri
         ? R(0, 0, SCENE_W, SCENE_H, '#6b7280', ' opacity="0.55"') + R(0, 0, SCENE_W, SCENE_H, '#ca8a04', ' opacity="0.22"')
         : ''
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SCENE_W} ${SCENE_H}" shape-rendering="crispEdges">${art}${wash}${crabInScene(status, model)}</svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${SCENE_H}" shape-rendering="crispEdges">${art}${wash}${crabInScene(status, model)}</svg>`
 }
 
 // What the picture says to a screen reader: the crab, then where it is.

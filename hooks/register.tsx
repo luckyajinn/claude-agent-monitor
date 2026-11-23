@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentRow, AgentStatus } from '../types'
 import { barSvg, crabAlt, crabSvg, crabText, WIRE_STEP, wireSvg } from './crab'
-import { SCENE_H, SCENE_W, sceneAlt, sceneOf, sceneSvg } from './scenes'
+import { SCENE_H, SCENE_NARROW_W, SCENE_W, sceneAlt, sceneOf, sceneSvg } from './scenes'
 import {
   addUsage,
   applyStep,
@@ -64,6 +64,10 @@ const scenes = atom({ plugin: 'agent-monitor', key: 'scenes' } as const, null)
 // A card's scene is as tall as the crab alone was, and keeps the scene's shape.
 const SCENE_HEIGHT = 32
 const SCENE_WIDTH = Math.round((SCENE_HEIGHT * SCENE_W) / SCENE_H)
+// In a narrow pane a card shows the left part of its scene, at the same scale.
+const SCENE_NARROW_WIDTH = Math.round((SCENE_HEIGHT * SCENE_NARROW_W) / SCENE_H)
+// Job tints in the terminal dark enough to need light text on them.
+const DARK_TINTS = new Set(['blue', 'gray'])
 // The wider banner at the top of an opened agent.
 const BANNER_HEIGHT = 45
 const BANNER_WIDTH = Math.round((BANNER_HEIGHT * SCENE_W) / SCENE_H)
@@ -422,24 +426,33 @@ export const register: Register = (on, options) => {
     // With the backgrounds off, each card shows the crab alone, as before 1.2.0.
     const staged = scenesOn(await read($, scenes))
     // A card's picture: the crab in the scene for its job, or the crab alone.
-    const picture = (row: AgentRow, isBanner = false) =>
-      staged ? (
+    // A narrow card shows the scene's left part; the opened agent's banner is
+    // the whole scene, larger when there is room.
+    const picture = (row: AgentRow, isBanner = false) => {
+      if (!staged) {
+        return (
+          <Svg
+            source={crabSvg(row.status, skinOf(row))}
+            alt={crabAlt(row.status, skinOf(row))}
+            width={48}
+            height={32}
+            isInteractive={row.status === 'running'}
+          />
+        )
+      }
+      const isCut = isNarrow && !isBanner
+      const isLarge = isBanner && !isNarrow
+
+      return (
         <Svg
-          source={sceneSvg(sceneOf(row), row.status, skinOf(row))}
+          source={sceneSvg(sceneOf(row), row.status, skinOf(row), isCut ? SCENE_NARROW_W : SCENE_W)}
           alt={sceneAlt(sceneOf(row), row.status, skinOf(row))}
-          width={isBanner && !isNarrow ? BANNER_WIDTH : SCENE_WIDTH}
-          height={isBanner && !isNarrow ? BANNER_HEIGHT : SCENE_HEIGHT}
-          isInteractive={row.status === 'running'}
-        />
-      ) : (
-        <Svg
-          source={crabSvg(row.status, skinOf(row))}
-          alt={crabAlt(row.status, skinOf(row))}
-          width={48}
-          height={32}
+          width={isLarge ? BANNER_WIDTH : isCut ? SCENE_NARROW_WIDTH : SCENE_WIDTH}
+          height={isLarge ? BANNER_HEIGHT : SCENE_HEIGHT}
           isInteractive={row.status === 'running'}
         />
       )
+    }
 
     // The tree's connectors. Where pictures draw, a picture `height` pixels
     // tall, so a line meets the next one with no gap between rows. In the
@@ -477,7 +490,7 @@ export const register: Register = (on, options) => {
       const activity =
         !hasSvg && staged && row.status === 'running' ? (
           <Box backgroundColor={color} paddingX={1}>
-            <Text color="black">{row.activity}</Text>
+            <Text color={DARK_TINTS.has(color) ? 'white' : 'black'}>{row.activity}</Text>
           </Box>
         ) : (
           <Text color={color}>{row.activity}</Text>

@@ -2131,3 +2131,37 @@ test('an opened agent shows its scene as a wide banner', async ($, on) => {
   expect(banner?.props.height).toBe(45)
   expect(banner?.props.alt).toBe('Sonnet crab, running, on the beach')
 })
+
+test('a narrow card shows the left part of its scene; the opened agent still gets the whole scene', async ($, on) => {
+  engine(on)
+  keepState(on)
+  await $.session.start(START)
+  await $.agent.spawn(SPAWN)
+  const narrow = { ...PANE, props: { ...PANE.props, bodyColumns: 30 } }
+
+  let ui = await $.ui.mount({ ...narrow, surface: 'desktop' })
+  const card: any = await pictureOf(ui)
+  expect(card?.props.width).toBe(128)
+  expect(card?.props.source).toContain('viewBox="0 0 40 10"')
+  await ui.press({ key: 'open-a1' })
+  await ui.unmount()
+
+  ui = await $.ui.mount({ ...narrow, surface: 'desktop' })
+  const pictures = ((await ui.findAll({ type: 'Svg' })) as any[]).filter(svg => / crab, /.test(svg.props.alt))
+  expect(pictures.map(svg => svg.props.width)).toContain(205)
+  await ui.unmount()
+})
+
+test('a dark job tint in the terminal gets light text', async ($, on) => {
+  engine(on)
+  on('state.get', (_: unknown, e: { key?: string }) => ({
+    value: {
+      value: e.key === 'agents' ? [{ ...newRow('w1', 'Search', 'Explore', MODEL, 0), activity: 'Researching the web', steps: 2 }] : undefined,
+      version: 1,
+    },
+  }))
+  const term = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const text: any = await term.find({ type: 'Text', text: /^Researching the web$/ })
+  expect(text?.props.color).toBe('white')
+  await term.unmount()
+})
