@@ -737,7 +737,7 @@ test('a clear keeps the active rows and every ancestor of one, and trims the tra
   expect(trailAfter(left, ['p', 'q'])).toEqual(['p'])
 })
 
-test('a new prompt keeps what the engine lists as going whatever the card says, and the main row only as a parent', () => {
+test('a new prompt keeps what the engine lists as going whatever the card says, and the main row while it runs', () => {
   const r = (id: string, status: 'running' | 'done' | 'failed', parentId: string | null = null) => ({
     ...newRow(id, id, 'x', MODEL, 0, parentId),
     status,
@@ -754,12 +754,15 @@ test('a new prompt keeps what the engine lists as going whatever the card says, 
   // With no list to ask, the card decides.
   expect(keptAtPrompt(undefined)(r('s', 'running'))).toBe(true)
   expect(keptAtPrompt(undefined)(r('w', 'done'))).toBe(false)
-  // The main row never stays on its own, running or not, list or no list.
+  // The engine never lists the main row, so its card decides: running stays
+  // (a prompt sent mid-turn joins that turn), finished goes, list or no list.
   const main = newMain(0)
   expect(main.status).toBe('running')
-  expect(kept(main)).toBe(false)
-  expect(keptAtPrompt(undefined)(main)).toBe(false)
-  expect(keptAtPrompt(new Set([MAIN_ID]))(main)).toBe(false)
+  expect(kept(main)).toBe(true)
+  expect(keptAtPrompt(undefined)(main)).toBe(true)
+  expect(keptAtPrompt(new Set())(main)).toBe(true)
+  expect(kept({ ...main, status: 'done' })).toBe(false)
+  expect(keptAtPrompt(new Set([MAIN_ID]))({ ...main, status: 'done' })).toBe(false)
 
   // With `survivors`: every ancestor of a kept row stays, the main row too.
   const tree = [
@@ -1804,16 +1807,16 @@ test('a new prompt keeps a done card the engine lists as going, as Clear finishe
   await prompt('and again')
   expect(ids()).toEqual([])
 
-  // A main row still running at a new prompt goes too (the engine never lists
-  // it, so a missed end cannot be told apart): the next main turn makes a
-  // fresh one.
+  // A main row still running at a new prompt stays: a prompt sent mid-turn
+  // joins that turn, and no new turn would make it a fresh row.
   await $.turn.start({ text: 'one more', turnId: 'main-2' })
   for await (const _chunk of $.turn.step({ ...STEP, turnId: 'main-2' })) {
     // Drained for its effect on the main row.
   }
   expect(ids()).toEqual(['main'])
   await prompt('and once more')
-  expect(ids()).toEqual([])
+  expect(ids()).toEqual(['main'])
+  // If its end was missed, the next main turn starts the row over.
   await $.turn.start({ text: 'fresh', turnId: 'main-3' })
   const [main] = held('agents') as { id: string; status: string; steps: number }[]
   expect(main).toMatchObject({ id: 'main', status: 'running', steps: 0 })
@@ -2164,4 +2167,60 @@ test('a dark job tint in the terminal gets light text', async ($, on) => {
   const text: any = await term.find({ type: 'Text', text: /^Researching the web$/ })
   expect(text?.props.color).toBe('white')
   await term.unmount()
+})
+
+// The main agent alone (1.2.2): its card stays in the pane while it works.
+
+test('a prompt sent while the main agent works keeps its card in the pane', async ($, on) => {
+  engine(on)
+  on('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
+  const held = keepState(on)
+  const prompt = (text: string) => $.prompt.submit({ text, origin: { kind: 'composer' } } as any)
+
+  await $.session.start(START)
+  await prompt('look into the repo')
+  await $.turn.start({ text: 'look into the repo', turnId: 'main-1' })
+  for await (const _chunk of $.turn.step({ ...STEP, turnId: 'main-1' })) {
+    // One step: the main agent is at work, no subagent.
+  }
+  // The person adds a message mid-turn: it joins main-1, no new turn starts.
+  await prompt('also check the tests')
+
+  const main = (held('agents') as { id: string; status: string; steps: number }[]).find(row => row.id === 'main')
+  expect(main).toMatchObject({ status: 'running', steps: 1 })
+  await inPane($, async ui => {
+    expect(await shows(ui, /Main Claude Agent/)).toBe(true)
+    expect(await shows(ui, /No subagents yet/)).toBe(false)
+  })
+})
+
+test('a main turn that starts with no text still gets its card', async ($, on) => {
+  engine(on)
+  on('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
+  keepState(on)
+
+  await $.session.start(START)
+  await $.turn.start({ turnId: 'main-1' } as any)
+  await inPane($, async ui => {
+    expect(await shows(ui, /Main Claude Agent/)).toBe(true)
+  })
+})
+
+test('a main row keeps adding up within one turn, and starts over when a new turn finds it stuck', async ($, on) => {
+  engine(on)
+  on('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
+  const held = keepState(on)
+  const main = () => (held('agents') as { id: string; steps: number; status: string }[]).find(row => row.id === 'main')
+
+  await $.session.start(START)
+  await $.turn.start({ text: 'go', turnId: 'main-1' })
+  for await (const _chunk of $.turn.step({ ...STEP, turnId: 'main-1' })) {
+    // Step one.
+  }
+  // The same turn announced again does not wipe it.
+  await $.turn.start({ text: 'go', turnId: 'main-1' })
+  expect(main()).toMatchObject({ status: 'running', steps: 1 })
+  // main-1's end never came; main-2 starts the row over.
+  await $.turn.start({ text: 'next', turnId: 'main-2' })
+  expect(main()).toMatchObject({ status: 'running', steps: 0 })
 })

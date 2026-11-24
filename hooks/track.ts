@@ -417,14 +417,21 @@ export const survivors = (list: AgentRow[], isActive: (row: AgentRow) => boolean
 // With a list, the engine decides: a listed agent stays whatever its card says
 // (a "done" card may be going again), and a "running" card it no longer lists
 // goes, so a missed end never leaves a card stuck. With no list, the card
-// decides: only a "running" one stays. The main agent's row never stays on its
-// own (the engine never lists it; the new prompt starts a new main turn, which
-// makes a fresh row): it stays only as the parent of a row kept here. Pass this
-// to `survivors`, which also keeps every ancestor of a kept row.
+// decides: only a "running" one stays. The engine never lists the main agent,
+// so its own card decides: a running main row stays, since a prompt sent while
+// the main agent works joins the turn already going and no new turn makes it a
+// fresh row; a finished one stays only as the parent of a row kept here. (A
+// main row stuck at running after a missed end is replaced when the next main
+// turn starts.) Pass this to `survivors`, which also keeps every ancestor of a
+// kept row.
 export const keptAtPrompt =
   (going: ReadonlySet<string> | undefined) =>
   (row: AgentRow): boolean =>
-    row.id !== MAIN_ID && (going === undefined ? row.status === 'running' : going.has(row.id))
+    row.id === MAIN_ID
+      ? row.status === 'running'
+      : going === undefined
+        ? row.status === 'running'
+        : going.has(row.id)
 // What the engine calls an agent that is still going.
 export const LIVE: ReadonlySet<string> = new Set(['pending', 'running', 'waiting'])
 

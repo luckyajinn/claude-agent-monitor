@@ -203,6 +203,10 @@ export const register: Register = (on, options) => {
   // in this module, not in `$.state`, which any plugin in the session can read.
   // A reload of the mod forgets them; the pane then says so.
   const notes = new Map<string, { prompt: string; report: string }>()
+  // The turn the main agent's row belongs to. A main turn that starts while
+  // the row still says running, under another turn id, means the last one's end
+  // was missed: that row starts over rather than adding up across prompts.
+  let mainTurnId: string | undefined
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -223,9 +227,11 @@ export const register: Register = (on, options) => {
   // prompt, every agent the engine lists as going stays, whatever its card
   // says (as with "Clear finished"), and the rest go, a "running" card the
   // engine no longer lists included (a missed end must not leave one stuck for
-  // good). The main agent's row goes unless something kept hangs beneath it;
-  // the new prompt's main turn starts a fresh one. A slash command, a
-  // background notification or another plugin's prompt is not a new prompt.
+  // good). The main agent's row stays while it runs (a prompt sent mid-turn
+  // joins that turn, which starts no new row) and otherwise goes unless
+  // something kept hangs beneath it; the new prompt's main turn starts a fresh
+  // one. A slash command, a background notification or another plugin's prompt
+  // is not a new prompt.
   on('prompt.submit', async ($, e, next) => {
     const isPerson = e.origin?.kind === 'composer' || e.origin?.kind === 'bridge'
 
@@ -298,10 +304,22 @@ export const register: Register = (on, options) => {
 
     try {
       const now = await $.clock.now()
-      if (id === MAIN_ID && e.text !== '') {
+      // A turn may start with no text (a continuation): the row is made all the same.
+      if (id === MAIN_ID && typeof e.text === 'string' && e.text !== '') {
         notes.set(id, { prompt: trunc(e.text, 400), report: '' })
       }
       await ensure($, id, '', now)
+      if (id === MAIN_ID) {
+        const turnId = typeof e.turnId === 'string' ? e.turnId : undefined
+        const isNewTurn = turnId !== undefined && turnId !== mainTurnId
+        mainTurnId = turnId ?? mainTurnId
+        // Still "running" from a turn whose end never came: start it over.
+        if (isNewTurn) {
+          await update($, agents, list =>
+            patch(list, id, row => (row.status === 'running' ? { ...newMain(now), model: row.model } : row)),
+          )
+        }
+      }
       await update($, agents, list => patch(list, id, row => revive(row, now)))
     } catch {
       // Tracking never breaks a turn.
